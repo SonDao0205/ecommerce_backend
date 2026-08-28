@@ -12,6 +12,8 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { InventoriesModule } from './modules/inventories/inventories.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { CustomerAddressesModule } from './modules/customer-addresses/customer-addresses.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { RedisCacheModule } from './common/cache/redis-cache.module';
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { CustomerAddressesModule } from './modules/customer-addresses/customer-a
       isGlobal: true,
       envFilePath: '.env',
     }),
+
+    RedisCacheModule,
 
     // 2. Cấu hình kết nối PostgreSQL bất đồng bộ qua ConfigService
     TypeOrmModule.forRootAsync({
@@ -55,6 +59,8 @@ import { CustomerAddressesModule } from './modules/customer-addresses/customer-a
     AuditLogsModule,
 
     CustomerAddressesModule,
+
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [AppService],

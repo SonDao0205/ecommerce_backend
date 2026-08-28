@@ -11,10 +11,15 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { CategoriesRepository } from './categories.repository';
 import { CategoryQueryDto } from './dto/category-query.dto';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
+import { STOREFRONT_CATEGORIES_CACHE_KEY } from './category-cache.constants';
 
 @Injectable()
 export class CategoriesService {
-  constructor(private readonly categoriesRepository: CategoriesRepository) {}
+  constructor(
+    private readonly categoriesRepository: CategoriesRepository,
+    private readonly cache: RedisCacheService,
+  ) {}
 
   // 1. Lấy danh sách danh mục theo chuẩn getAll management
   async getAllCategories(
@@ -46,7 +51,9 @@ export class CategoriesService {
       parentId: parentId || undefined,
     });
 
-    return await this.categoriesRepository.save(category, actorId);
+    const saved = await this.categoriesRepository.save(category, actorId);
+    await this.invalidateStorefrontCache();
+    return saved;
   }
 
   // 3. Cập nhật danh mục
@@ -71,7 +78,9 @@ export class CategoriesService {
     category.description = description || undefined;
     category.parentId = parentId || undefined;
 
-    return await this.categoriesRepository.save(category, actorId);
+    const saved = await this.categoriesRepository.save(category, actorId);
+    await this.invalidateStorefrontCache();
+    return saved;
   }
 
   // 4. Ẩn hoặc hiện danh mục
@@ -82,7 +91,9 @@ export class CategoriesService {
   ): Promise<Category> {
     const category = await this.findCategoryById(id);
     category.isActive = isActive;
-    return await this.categoriesRepository.save(category, actorId);
+    const saved = await this.categoriesRepository.save(category, actorId);
+    await this.invalidateStorefrontCache();
+    return saved;
   }
 
   // 5. Tìm theo ID (Đã sửa lỗi đệ quy)
@@ -106,5 +117,9 @@ export class CategoriesService {
     const exists = await this.categoriesRepository.existsById(parentId);
     if (!exists) throw new NotFoundException('Không tìm thấy danh mục cha!');
     return exists;
+  }
+
+  private invalidateStorefrontCache(): Promise<void> {
+    return this.cache.del(STOREFRONT_CATEGORIES_CACHE_KEY);
   }
 }
