@@ -2,9 +2,15 @@ import { BadRequestException } from '@nestjs/common';
 import { DashboardRepository } from './dashboard.repository';
 import { DashboardService } from './dashboard.service';
 import { DashboardRange } from './dto/dashboard-query.dto';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
+import { ConfigService } from '@nestjs/config';
 
 describe('DashboardService', () => {
-  const service = new DashboardService({} as DashboardRepository);
+  const service = new DashboardService(
+    {} as DashboardRepository,
+    {} as RedisCacheService,
+    {} as ConfigService,
+  );
   const now = new Date('2026-08-28T03:30:00.000Z'); // 10:30 tại Việt Nam
 
   it('resolves today from Vietnam midnight and compares the same elapsed time', () => {

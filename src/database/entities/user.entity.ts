@@ -21,7 +21,8 @@ export class User extends BaseEntity {
   fullName?: string;
 
   // Số điện thoại liên hệ
-  @Column({ type: 'varchar', length: 20, nullable: true })
+  @Index({ unique: true })
+  @Column({ type: 'varchar', length: 20, nullable: true, unique: true })
   phone?: string;
 
   // Trạng thái tài khoản (true: hoạt động, false: bị khóa)

@@ -140,26 +140,19 @@ export class CartService {
     await this.validateVariant(product, selectedVariant);
 
     const cart = await this.getOrCreateCart(userId);
-    const existing = await this.cartRepository.findItem(
+    const maxQuantity = await this.availableQuantity(product, selectedVariant);
+    const result = await this.cartRepository.addItemAtomic(
       cart.id!,
       product.id,
-      selectedVariant?.id,
+      selectedVariant?.id ?? null,
+      dto.quantity,
+      maxQuantity,
+      ignoreExisting,
     );
-    if (existing && ignoreExisting) return false;
-
-    const nextQuantity = (existing?.quantity ?? 0) + dto.quantity;
-    await this.assertStock(product, selectedVariant, nextQuantity);
-
-    const item =
-      existing ??
-      this.cartRepository.createItem({
-        cartId: cart.id,
-        productId: product.id,
-        variantId: selectedVariant?.id ?? null,
-      });
-    item.quantity = nextQuantity;
-    await this.cartRepository.saveItem(item);
-    return true;
+    if (result.status === 'stock_exceeded') {
+      throw new BadRequestException('Số lượng sản phẩm không đủ!');
+    }
+    return result.status === 'saved';
   }
 
   private async getOrCreateCart(userId: string): Promise<Cart> {
@@ -211,6 +204,15 @@ export class CartService {
         throw new BadRequestException('Số lượng vượt quá tồn kho sản phẩm!');
       }
     }
+  }
+
+  private async availableQuantity(
+    product: Product,
+    variant: ProductVariant | undefined,
+  ): Promise<number> {
+    if (variant) return Math.max(variant.stock, 0);
+    const inventory = await this.cartRepository.findInventory(product.id!);
+    return inventory ? this.availableStock(inventory) : 0;
   }
 
   private availableStock(inventory: Inventory): number {

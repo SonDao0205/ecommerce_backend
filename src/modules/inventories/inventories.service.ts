@@ -14,10 +14,15 @@ import {
   InventoryProductView,
   InventoryUpdateError,
 } from './inventories.repository';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
+import { DASHBOARD_CACHE_VERSION_KEY } from '../dashboard/dashboard-cache.constants';
 
 @Injectable()
 export class InventoriesService {
-  constructor(private readonly inventoriesRepository: InventoriesRepository) {}
+  constructor(
+    private readonly inventoriesRepository: InventoriesRepository,
+    private readonly cache: RedisCacheService,
+  ) {}
 
   getAll(
     query: InventoryQueryDto,
@@ -42,13 +47,18 @@ export class InventoriesService {
     actorId: string,
   ): Promise<InventoryProductView> {
     try {
-      return await this.inventoriesRepository.updateStock(productId, {
-        variantId: dto.variantId,
-        stock: dto.stock,
-        expectedStock: dto.expectedStock,
-        reason: dto.reason,
-        actorId,
-      });
+      const inventory = await this.inventoriesRepository.updateStock(
+        productId,
+        {
+          variantId: dto.variantId,
+          stock: dto.stock,
+          expectedStock: dto.expectedStock,
+          reason: dto.reason,
+          actorId,
+        },
+      );
+      await this.cache.increment(DASHBOARD_CACHE_VERSION_KEY);
+      return inventory;
     } catch (error) {
       if (!(error instanceof InventoryUpdateError)) throw error;
       if (

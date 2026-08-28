@@ -15,6 +15,9 @@ import { LoginDto } from './dto/login.dto';
 import { ConfigService } from '@nestjs/config';
 import { AuthRepository } from './auth.repository';
 import { JwtPayload } from './auth.types';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
+import { authSessionCacheKey } from './auth-cache.constants';
+import { DASHBOARD_CACHE_VERSION_KEY } from '../dashboard/dashboard-cache.constants';
 
 @Injectable()
 export class AuthService {
@@ -22,6 +25,7 @@ export class AuthService {
     private readonly authRepository: AuthRepository,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly cache: RedisCacheService,
   ) {}
 
   // Helper: Sinh cặp Access Token và Refresh Token
@@ -64,7 +68,8 @@ export class AuthService {
 
   // 1. ĐĂNG KÝ
   async register(registerDto: RegisterDto) {
-    const { email, password, phone, fullName } = registerDto;
+    const { password, phone, fullName } = registerDto;
+    const email = registerDto.email?.trim().toLowerCase();
 
     if (!password || !phone || !fullName) {
       throw new BadRequestException('Bạn cần nhập đầy đủ thông tin!');
@@ -98,11 +103,15 @@ export class AuthService {
       );
 
       delete savedUser.password;
+      await this.cache.increment(DASHBOARD_CACHE_VERSION_KEY);
       return {
         ...savedUser,
         roles: [defaultRole.name],
       };
-    } catch {
+    } catch (error) {
+      if (this.isUniqueViolation(error)) {
+        throw new ConflictException('Email hoặc số điện thoại đã tồn tại!');
+      }
       throw new InternalServerErrorException('Lỗi khi đăng ký tài khoản!');
     }
   }
@@ -142,6 +151,7 @@ export class AuthService {
 
     // Lưu hashed Refresh Token vào Database
     await this.updateRefreshToken(user.id!, tokens.refreshToken);
+    await this.markSessionActive(user);
 
     return {
       ...tokens,
@@ -190,6 +200,7 @@ export class AuthService {
       // Sinh cặp tokens mới (Token Rotation)
       const tokens = await this.generateTokens(user.id!, user.email, roles);
       await this.updateRefreshToken(user.id!, tokens.refreshToken);
+      await this.markSessionActive(user);
 
       return tokens;
     } catch {
@@ -203,6 +214,17 @@ export class AuthService {
   async logout(userId: string) {
     // Xóa Refresh Token trong Database (set về null)
     await this.updateRefreshToken(userId, null);
+    const revokedTtl = Number(
+      this.configService.get<string>(
+        'AUTH_SESSION_REVOKED_TTL_SECONDS',
+        '86400',
+      ),
+    );
+    await this.cache.setJson(
+      authSessionCacheKey(userId),
+      { active: false },
+      revokedTtl,
+    );
     return { message: 'Đăng xuất thành công!' };
   }
 
@@ -212,5 +234,43 @@ export class AuthService {
 
   async existByPhone(phone: string): Promise<boolean> {
     return this.authRepository.phoneExists(phone);
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === '23505'
+    );
+  }
+
+  private async markSessionActive(user: {
+    id?: string;
+    email?: string | null;
+    fullName?: string;
+    phone?: string;
+    avatarUrl?: string;
+    isActive?: boolean;
+  }): Promise<void> {
+    if (!user.id) return;
+    const ttl = Number(
+      this.configService.get<string>('AUTH_SESSION_CACHE_TTL_SECONDS', '60'),
+    );
+    await this.cache.setJson(
+      authSessionCacheKey(user.id),
+      {
+        active: true,
+        user: {
+          id: user.id,
+          email: user.email ?? null,
+          fullName: user.fullName,
+          phone: user.phone,
+          avatarUrl: user.avatarUrl,
+          isActive: user.isActive !== false,
+        },
+      },
+      ttl,
+    );
   }
 }

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -23,6 +24,7 @@ import { RejectOrderDto } from './dto/reject-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { OrderSummaryView, OrderView } from './orders.repository';
 import { OrdersService } from './orders.service';
+import { RateLimit } from '@common/rate-limit/rate-limit.decorator';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('orders')
@@ -112,27 +114,45 @@ export class OrdersController {
   }
 
   @Post('from-cart')
+  @RateLimit({
+    limit: 10,
+    windowSeconds: 60,
+    scope: 'identity',
+    keyPrefix: 'orders:create',
+  })
   async createFromCart(
     @Req() req: AuthenticatedRequest,
     @Body() dto: CreateOrderFromCartDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<ApiResponseData<OrderView>> {
     return {
       status: true,
       message: 'Đặt hàng từ giỏ hàng thành công!',
-      data: await this.ordersService.createFromCart(req.user.id!, dto),
+      data: await this.ordersService.createFromCart(
+        req.user.id!,
+        dto,
+        idempotencyKey,
+      ),
       code: 201,
     };
   }
 
   @Post('buy-now')
+  @RateLimit({
+    limit: 10,
+    windowSeconds: 60,
+    scope: 'identity',
+    keyPrefix: 'orders:create',
+  })
   async buyNow(
     @Req() req: AuthenticatedRequest,
     @Body() dto: BuyNowOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<ApiResponseData<OrderView>> {
     return {
       status: true,
       message: 'Mua ngay thành công!',
-      data: await this.ordersService.buyNow(req.user.id!, dto),
+      data: await this.ordersService.buyNow(req.user.id!, dto, idempotencyKey),
       code: 201,
     };
   }

@@ -5,7 +5,9 @@ import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { StorefrontProduct } from '../products/products.repository';
 import { StorefrontProductsQueryDto } from './dto/storefront-products-query.dto';
 import { StorefrontService } from './storefront.service';
+import { RateLimit } from '@common/rate-limit/rate-limit.decorator';
 
+@RateLimit({ limit: 120, windowSeconds: 60, keyPrefix: 'storefront' })
 @Controller('storefront')
 export class StorefrontController {
   constructor(private readonly storefrontService: StorefrontService) {}

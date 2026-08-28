@@ -13,5 +13,6 @@ export class AuditLogQueryDto {
   @Transform(({ value }) => Number(value))
   @IsInt()
   @Min(0)
+  @Max(10_000)
   offset = 0;
 }

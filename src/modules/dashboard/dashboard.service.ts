@@ -6,6 +6,12 @@ import {
   DashboardSeriesPoint,
   MetricSnapshot,
 } from './dashboard.repository';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
+import { ConfigService } from '@nestjs/config';
+import {
+  DASHBOARD_CACHE_VERSION_KEY,
+  dashboardCacheKey,
+} from './dashboard-cache.constants';
 
 export interface DashboardMetric {
   value: number;
@@ -51,9 +57,27 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly repository: DashboardRepository) {}
+  constructor(
+    private readonly repository: DashboardRepository,
+    private readonly cache: RedisCacheService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async getDashboard(query: DashboardQueryDto): Promise<DashboardView> {
+    const version = await this.cache.getNumber(DASHBOARD_CACHE_VERSION_KEY);
+    const ttl = Number(
+      this.configService.get<string>('DASHBOARD_CACHE_TTL_SECONDS', '30'),
+    );
+    return this.cache.rememberJson(
+      dashboardCacheKey(version, query.range, query.from, query.to),
+      ttl,
+      () => this.loadDashboard(query),
+    );
+  }
+
+  private async loadDashboard(
+    query: DashboardQueryDto,
+  ): Promise<DashboardView> {
     const period = this.resolvePeriod(query);
     const [
       current,

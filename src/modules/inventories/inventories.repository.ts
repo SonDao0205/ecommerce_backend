@@ -110,7 +110,7 @@ export class InventoriesRepository {
     if (query.search) {
       parameters.push(`%${query.search}%`);
       conditions.push(
-        `(p.name ILIKE $${parameters.length} OR COALESCE(p.sku, '') ILIKE $${parameters.length})`,
+        `(p.name ILIKE $${parameters.length} OR p.sku ILIKE $${parameters.length})`,
       );
     }
     const where = conditions.join(' AND ');
@@ -193,19 +193,14 @@ export class InventoriesRepository {
         inventoryType: 'adjustment',
       });
       const [product] = (await queryRunner.query(
-        `SELECT p.id, p.name, i.id AS inventory_id, i.stock,
-                i.reserved_stock
+        `SELECT p.id, p.name
          FROM products p
-         INNER JOIN inventories i ON i.product_id = p.id AND i.deleted_at IS NULL
          WHERE p.id = $1 AND p.deleted_at IS NULL
-         LIMIT 1 FOR UPDATE OF p, i`,
+         LIMIT 1 FOR UPDATE OF p`,
         [productId],
       )) as unknown as {
         id: string;
         name: string;
-        inventory_id: string;
-        stock: number;
-        reserved_stock: number;
       }[];
       if (!product) {
         throw new InventoryUpdateError(
@@ -235,7 +230,8 @@ export class InventoriesRepository {
       if (input.variantId) {
         await this.updateVariantStock(queryRunner, product, input);
       } else {
-        await this.updateSimpleProductStock(queryRunner, product, input);
+        const inventory = await this.lockInventory(queryRunner, product.id);
+        await this.updateSimpleProductStock(queryRunner, inventory, input);
       }
       await queryRunner.commitTransaction();
       const saved = await this.findProductById(productId);
@@ -317,7 +313,7 @@ export class InventoriesRepository {
 
   private async updateVariantStock(
     queryRunner: QueryRunner,
-    product: { id: string; inventory_id: string; stock: number },
+    product: { id: string },
     input: UpdateStockInput,
   ): Promise<void> {
     const [variant] = (await queryRunner.query(
@@ -334,6 +330,7 @@ export class InventoriesRepository {
         'Không tìm thấy biến thể cuối của sản phẩm!',
       );
     this.assertExpectedStock(variant.stock, input);
+    const inventory = await this.lockInventory(queryRunner, product.id);
     await queryRunner.query(
       `UPDATE product_variants SET stock = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
       [variant.id, input.stock],
@@ -348,26 +345,50 @@ export class InventoriesRepository {
     )) as unknown as { total: string | number }[];
     await queryRunner.query(
       `UPDATE inventories SET stock = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [product.inventory_id, Number(total)],
+      [inventory.id, Number(total)],
     );
   }
 
   private async updateSimpleProductStock(
     queryRunner: QueryRunner,
-    product: { inventory_id: string; stock: number; reserved_stock: number },
+    inventory: { id: string; stock: number; reservedStock: number },
     input: UpdateStockInput,
   ): Promise<void> {
-    this.assertExpectedStock(product.stock, input);
-    if (input.stock < product.reserved_stock) {
+    this.assertExpectedStock(inventory.stock, input);
+    if (input.stock < inventory.reservedStock) {
       throw new InventoryUpdateError(
         'STOCK_BELOW_RESERVED',
-        `Số lượng không được nhỏ hơn số lượng đang giữ chỗ (${product.reserved_stock})!`,
+        `Số lượng không được nhỏ hơn số lượng đang giữ chỗ (${inventory.reservedStock})!`,
       );
     }
     await queryRunner.query(
       `UPDATE inventories SET stock = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [product.inventory_id, input.stock],
+      [inventory.id, input.stock],
     );
+  }
+
+  private async lockInventory(
+    queryRunner: QueryRunner,
+    productId: string,
+  ): Promise<{ id: string; stock: number; reservedStock: number }> {
+    const [row] = (await queryRunner.query(
+      `SELECT id, stock, reserved_stock
+       FROM inventories
+       WHERE product_id = $1 AND deleted_at IS NULL
+       LIMIT 1 FOR UPDATE`,
+      [productId],
+    )) as unknown as { id: string; stock: number; reserved_stock: number }[];
+    if (!row) {
+      throw new InventoryUpdateError(
+        'INVENTORY_NOT_FOUND',
+        'Sản phẩm chưa được thiết lập tồn kho!',
+      );
+    }
+    return {
+      id: row.id,
+      stock: row.stock,
+      reservedStock: row.reserved_stock,
+    };
   }
 
   private assertExpectedStock(

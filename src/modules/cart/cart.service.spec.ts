@@ -35,6 +35,7 @@ describe('CartService', () => {
       countActiveVariants: jest.fn().mockResolvedValue(2),
       countActiveVariantChildren: jest.fn().mockResolvedValue(0),
       findInventory: jest.fn(),
+      addItemAtomic: jest.fn(),
       saveItem: jest.fn(),
       createItem: jest.fn(),
       removeItem: jest.fn(),
@@ -53,7 +54,7 @@ describe('CartService', () => {
       variant,
       quantity: 2,
     } as CartItem;
-    repository.findItem.mockResolvedValue(existing);
+    repository.addItemAtomic.mockResolvedValue({ status: 'skipped' });
     repository.findItems.mockResolvedValue([existing]);
     const service = new CartService(repository as unknown as CartRepository);
 
@@ -71,18 +72,19 @@ describe('CartService', () => {
 
   it('thêm sản phẩm mới khi merge và giữ đúng số lượng giỏ khách', async () => {
     const repository = createRepository();
-    repository.findItem.mockResolvedValue(null);
     const newItem = {
       cartId: cart.id,
       productId: product.id,
       variantId: variant.id,
     } as CartItem;
-    repository.createItem.mockReturnValue(newItem);
-    repository.saveItem.mockImplementation((item: CartItem) =>
-      Promise.resolve(item),
-    );
+    repository.addItemAtomic.mockResolvedValue({
+      status: 'saved',
+      item: { ...newItem, id: 'item-id', quantity: 3 },
+    });
     repository.findItems.mockImplementation(() =>
-      Promise.resolve([{ ...newItem, id: 'item-id', product, variant }]),
+      Promise.resolve([
+        { ...newItem, id: 'item-id', product, variant, quantity: 3 },
+      ]),
     );
     const service = new CartService(repository as unknown as CartRepository);
 
@@ -94,8 +96,13 @@ describe('CartService', () => {
 
     expect(result.mergedCount).toBe(1);
     expect(result.items[0].quantity).toBe(3);
-    expect(repository.saveItem).toHaveBeenCalledWith(
-      expect.objectContaining({ quantity: 3 }),
+    expect(repository.addItemAtomic).toHaveBeenCalledWith(
+      cart.id,
+      product.id,
+      variant.id,
+      3,
+      10,
+      true,
     );
   });
 });

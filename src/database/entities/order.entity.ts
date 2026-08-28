@@ -24,6 +24,10 @@ export enum OrderStatus {
  * Order Entity: Đơn hàng do khách hàng đặt mua.
  */
 @Entity('orders')
+@Index('UQ_orders_user_idempotency_key', ['userId', 'idempotencyKey'], {
+  unique: true,
+  where: '"idempotency_key" IS NOT NULL',
+})
 export class Order extends BaseEntity {
   // Mã đơn hàng hiển thị với khách hàng (ví dụ: ORD-20260826-XXXX)
   @Index({ unique: true })
@@ -37,6 +41,22 @@ export class Order extends BaseEntity {
   @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'user_id' })
   user?: User;
+
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  idempotencyKey?: string | null;
+
+  @Column({
+    name: 'request_fingerprint',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  requestFingerprint?: string | null;
 
   // Trạng thái vòng đời đơn hàng: Chờ xác nhận -> Đã xác nhận -> Đang xử lý -> Đang giao -> Hoàn tất / Đã hủy
   @Column({

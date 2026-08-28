@@ -14,7 +14,8 @@ export type OrderCreationErrorCode =
   | 'VARIANT_REQUIRED'
   | 'VARIANT_INVALID'
   | 'INVENTORY_MISSING'
-  | 'STOCK_EXCEEDED';
+  | 'STOCK_EXCEEDED'
+  | 'IDEMPOTENCY_KEY_REUSED';
 
 export class OrderCreationError extends Error {
   constructor(
@@ -39,6 +40,11 @@ export interface BuyNowInput {
   variantId?: string;
   variantSku?: string;
   quantity: number;
+}
+
+export interface OrderIdempotencyInput {
+  key: string;
+  fingerprint: string;
 }
 
 export interface OrderItemView {
@@ -176,7 +182,7 @@ export class OrdersRepository {
         o.order_code ILIKE ${value}
         OR o.recipient_name ILIKE ${value}
         OR o.recipient_phone ILIKE ${value}
-        OR COALESCE(u.email, '') ILIKE ${value}
+        OR u.email ILIKE ${value}
       )`);
     }
 
@@ -332,6 +338,7 @@ export class OrdersRepository {
         `SELECT product_id, variant_id, quantity
          FROM order_items
          WHERE order_id = $1 AND deleted_at IS NULL
+         ORDER BY product_id ASC, variant_id ASC NULLS FIRST
          FOR UPDATE`,
         [id],
       )) as unknown as {
@@ -341,6 +348,20 @@ export class OrdersRepository {
       }[];
       for (const item of items) {
         if (!item.product_id) continue;
+        await queryRunner.query(
+          `SELECT id FROM products
+           WHERE id = $1 AND deleted_at IS NULL
+           LIMIT 1 FOR UPDATE`,
+          [item.product_id],
+        );
+        if (item.variant_id) {
+          await queryRunner.query(
+            `SELECT id FROM product_variants
+             WHERE id = $1 AND deleted_at IS NULL
+             LIMIT 1 FOR UPDATE`,
+            [item.variant_id],
+          );
+        }
         const [inventory] = (await queryRunner.query(
           `SELECT id, stock FROM inventories
            WHERE product_id = $1 AND deleted_at IS NULL
@@ -384,6 +405,7 @@ export class OrdersRepository {
   createFromCart(
     userId: string,
     recipient: OrderRecipientInput,
+    idempotency: OrderIdempotencyInput,
   ): Promise<OrderView> {
     return this.createOrder(
       userId,
@@ -410,6 +432,7 @@ export class OrdersRepository {
         }));
       },
       true,
+      idempotency,
     );
   }
 
@@ -417,12 +440,14 @@ export class OrdersRepository {
     userId: string,
     recipient: OrderRecipientInput,
     item: BuyNowInput,
+    idempotency: OrderIdempotencyInput,
   ): Promise<OrderView> {
     return this.createOrder(
       userId,
       recipient,
       () => Promise.resolve([item]),
       false,
+      idempotency,
     );
   }
 
@@ -431,14 +456,51 @@ export class OrdersRepository {
     recipient: OrderRecipientInput,
     loadLines: (queryRunner: QueryRunner) => Promise<RequestedLine[]>,
     clearCart: boolean,
+    idempotency: OrderIdempotencyInput,
+  ): Promise<OrderView> {
+    const existing = await this.findByIdempotencyKey(userId, idempotency);
+    if (existing) return existing;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await this.createOrderAttempt(
+          userId,
+          recipient,
+          loadLines,
+          clearCart,
+          idempotency,
+        );
+      } catch (error) {
+        if (!this.isRetryableTransactionError(error) || attempt === 3) {
+          throw error;
+        }
+      }
+    }
+    throw new Error('Không thể tạo đơn hàng sau khi thử lại');
+  }
+
+  private async createOrderAttempt(
+    userId: string,
+    recipient: OrderRecipientInput,
+    loadLines: (queryRunner: QueryRunner) => Promise<RequestedLine[]>,
+    clearCart: boolean,
+    idempotency: OrderIdempotencyInput,
   ): Promise<OrderView> {
     const queryRunner = this.dataSource.createQueryRunner();
+    let released = false;
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
       await setDatabaseAuditContext(queryRunner, { actorId: userId });
-      const lines = await loadLines(queryRunner);
-      const order = await this.insertOrder(queryRunner, userId, recipient);
+      const order = await this.insertOrder(
+        queryRunner,
+        userId,
+        recipient,
+        idempotency,
+      );
+      const lines = (await loadLines(queryRunner)).sort((left, right) =>
+        this.lineLockKey(left).localeCompare(this.lineLockKey(right)),
+      );
       const items: OrderItemView[] = [];
       let totalAmount = 0;
 
@@ -486,9 +548,15 @@ export class OrdersRepository {
       if (queryRunner.isTransactionActive) {
         await queryRunner.rollbackTransaction();
       }
+      await queryRunner.release();
+      released = true;
+      if (this.isUniqueViolation(error)) {
+        const existing = await this.findByIdempotencyKey(userId, idempotency);
+        if (existing) return existing;
+      }
       throw error;
     } finally {
-      await queryRunner.release();
+      if (!released) await queryRunner.release();
     }
   }
 
@@ -496,13 +564,15 @@ export class OrdersRepository {
     queryRunner: QueryRunner,
     userId: string,
     recipient: OrderRecipientInput,
+    idempotency: OrderIdempotencyInput,
   ): Promise<RawOrder> {
     const orderCode = this.generateOrderCode();
     const rows = (await queryRunner.query(
       `INSERT INTO orders
          (order_code, user_id, status, total_amount, shipping_address,
-          recipient_name, recipient_phone, note)
-       VALUES ($1, $2, $3, 0, $4, $5, $6, $7)
+          recipient_name, recipient_phone, note, idempotency_key,
+          request_fingerprint)
+       VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9)
        RETURNING id, order_code, user_id, status, total_amount,
                  shipping_address, recipient_name, recipient_phone, note,
                  created_at, updated_at`,
@@ -514,6 +584,8 @@ export class OrdersRepository {
         recipient.recipientName,
         recipient.recipientPhone,
         recipient.note ?? null,
+        idempotency.key,
+        idempotency.fingerprint,
       ],
     )) as unknown as RawOrder[];
     const order = rows[0];
@@ -777,5 +849,48 @@ export class OrdersRepository {
   private generateOrderCode(): string {
     const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
     return `ORD-${date}-${randomUUID().slice(0, 8).toUpperCase()}`;
+  }
+
+  private async findByIdempotencyKey(
+    userId: string,
+    idempotency: OrderIdempotencyInput,
+  ): Promise<OrderView | null> {
+    const [row] = (await this.dataSource.query(
+      `SELECT id, request_fingerprint
+       FROM orders
+       WHERE user_id = $1 AND idempotency_key = $2 AND deleted_at IS NULL
+       LIMIT 1`,
+      [userId, idempotency.key],
+    )) as unknown as { id: string; request_fingerprint: string }[];
+    if (!row) return null;
+    if (row.request_fingerprint !== idempotency.fingerprint) {
+      throw new OrderCreationError(
+        'IDEMPOTENCY_KEY_REUSED',
+        'Idempotency-Key đã được dùng cho một yêu cầu khác!',
+      );
+    }
+    return this.findById(row.id, userId);
+  }
+
+  private lineLockKey(line: RequestedLine): string {
+    return `${line.productId ?? line.productSku?.toLowerCase() ?? ''}:${
+      line.variantId ?? line.variantSku?.toLowerCase() ?? ''
+    }`;
+  }
+
+  private isRetryableTransactionError(error: unknown): boolean {
+    const code = this.postgresErrorCode(error);
+    return code === '40P01' || code === '40001';
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    return this.postgresErrorCode(error) === '23505';
+  }
+
+  private postgresErrorCode(error: unknown): string | undefined {
+    if (typeof error !== 'object' || error === null || !('code' in error)) {
+      return undefined;
+    }
+    return typeof error.code === 'string' ? error.code : undefined;
   }
 }

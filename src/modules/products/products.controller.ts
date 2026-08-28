@@ -1,6 +1,5 @@
 import {
   Body,
-  UploadedFiles,
   Controller,
   Get,
   Param,
@@ -11,10 +10,7 @@ import {
   Patch,
   Req,
   UseGuards,
-  UseInterceptors,
-  BadRequestException,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
 import { ProductsService } from './products.service';
 import { ApiResponseData } from 'src/database/dtos/common/api_respone_data';
 import { Product, UserRoleEnum } from '@entities';
@@ -27,6 +23,7 @@ import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { UpdateStatusDto } from 'src/database/dtos/common/update_status.dto';
 import { ValidateProductSkusDto } from './dto/validate-product-skus.dto';
 import type { AuthenticatedRequest } from '../auth/auth.types';
+import { UpdateProductDto } from './dto/update-product.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('products')
@@ -66,74 +63,29 @@ export class ProductsController {
 
   @Roles(UserRoleEnum.ADMIN)
   @Post()
-  @UseInterceptors(
-    FilesInterceptor('images', 6, {
-      limits: { fileSize: 50 * 1024 * 1024 },
-      fileFilter: (_request, file, callback) => {
-        const isImage = file.mimetype.startsWith('image/');
-        const isVideo = file.mimetype.startsWith('video/');
-        if (!isImage && !isVideo) {
-          callback(
-            new BadRequestException('Ảnh tối đa 5 MB, video tối đa 50 MB'),
-            false,
-          );
-          return;
-        }
-        callback(null, true);
-      },
-    }),
-  )
   async createProduct(
     @Req() req: AuthenticatedRequest,
     @Body() dto: CreateProductDto,
-    @UploadedFiles() files: Express.Multer.File[],
   ): Promise<ApiResponseData<Product>> {
     return {
       status: true,
       message: 'Thêm sản phẩm thành công!',
-      data: await this.productService.createProduct(
-        dto,
-        files ?? [],
-        req.user.id,
-      ),
+      data: await this.productService.createProduct(dto, [], req.user.id),
       code: 201,
     };
   }
 
   @Roles(UserRoleEnum.ADMIN)
   @Put(':id')
-  @UseInterceptors(
-    FilesInterceptor('images', 6, {
-      limits: { fileSize: 50 * 1024 * 1024 },
-      fileFilter: (_request, file, callback) => {
-        const isImage = file.mimetype.startsWith('image/');
-        const isVideo = file.mimetype.startsWith('video/');
-        if (!isImage && !isVideo) {
-          callback(
-            new BadRequestException('Ảnh tối đa 5 MB, video tối đa 50 MB'),
-            false,
-          );
-          return;
-        }
-        callback(null, true);
-      },
-    }),
-  )
   async updateProduct(
     @Req() req: AuthenticatedRequest,
-    @Body() dto: CreateProductDto,
+    @Body() dto: UpdateProductDto,
     @Param('id', ParseUUIDPipe) id: string,
-    @UploadedFiles() files: Express.Multer.File[],
   ): Promise<ApiResponseData<Product>> {
     return {
       status: true,
       message: 'Cập nhật sản phẩm thành công!',
-      data: await this.productService.updateProduct(
-        id,
-        dto,
-        files ?? [],
-        req.user.id,
-      ),
+      data: await this.productService.updateProduct(id, dto, [], req.user.id),
       code: 201,
     };
   }

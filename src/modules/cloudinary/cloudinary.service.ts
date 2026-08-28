@@ -14,6 +14,14 @@ export interface UploadedImage {
   resourceType: 'image' | 'video';
 }
 
+export interface CloudinaryUploadSignature {
+  timestamp: number;
+  signature: string;
+  apiKey: string;
+  cloudName: string;
+  folder: string;
+}
+
 @Injectable()
 export class CloudinaryService {
   constructor(private readonly configService: ConfigService) {
@@ -67,6 +75,23 @@ export class CloudinaryService {
         }),
       ),
     );
+  }
+
+  createUploadSignature(): CloudinaryUploadSignature {
+    this.ensureConfigured();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const folder = 'ecommerce/products';
+    const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET')!;
+    return {
+      timestamp,
+      folder,
+      signature: cloudinary.utils.api_sign_request(
+        { timestamp, folder },
+        apiSecret,
+      ),
+      apiKey: this.configService.get<string>('CLOUDINARY_API_KEY')!,
+      cloudName: this.configService.get<string>('CLOUDINARY_CLOUD_NAME')!,
+    };
   }
 
   private uploadImage(file: Express.Multer.File): Promise<UploadedImage> {

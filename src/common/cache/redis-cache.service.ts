@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient } from 'redis';
+import { randomUUID } from 'node:crypto';
 
 @Injectable()
 export class RedisCacheService implements OnModuleInit, OnApplicationShutdown {
@@ -13,6 +14,7 @@ export class RedisCacheService implements OnModuleInit, OnApplicationShutdown {
   private readonly client: ReturnType<typeof createClient>;
   private connecting: Promise<void> | null = null;
   private lastWarningAt = 0;
+  private readonly inFlight = new Map<string, Promise<unknown>>();
 
   constructor(private readonly configService: ConfigService) {
     const url = this.configService.get<string>('REDIS_URL');
@@ -85,6 +87,27 @@ export class RedisCacheService implements OnModuleInit, OnApplicationShutdown {
     }
   }
 
+  async setJsonIfAbsent(
+    key: string,
+    value: unknown,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    if (!this.client.isReady) {
+      this.connectInBackground();
+      return false;
+    }
+    try {
+      const result = await this.client.set(key, JSON.stringify(value), {
+        EX: Math.max(1, Math.floor(ttlSeconds)),
+        NX: true,
+      });
+      return result === 'OK';
+    } catch (error) {
+      this.logOperationError('SET NX', key, error);
+      return false;
+    }
+  }
+
   async del(key: string): Promise<void> {
     if (!this.client.isReady) {
       this.connectInBackground();
@@ -95,6 +118,148 @@ export class RedisCacheService implements OnModuleInit, OnApplicationShutdown {
     } catch (error) {
       this.logOperationError('DEL', key, error);
     }
+  }
+
+  async increment(key: string): Promise<number> {
+    if (!this.client.isReady) {
+      this.connectInBackground();
+      return 0;
+    }
+    try {
+      return await this.client.incr(key);
+    } catch (error) {
+      this.logOperationError('INCR', key, error);
+      return 0;
+    }
+  }
+
+  async getNumber(key: string): Promise<number> {
+    if (!this.client.isReady) {
+      this.connectInBackground();
+      return 0;
+    }
+    try {
+      const value = await this.client.get(key);
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    } catch (error) {
+      this.logOperationError('GET', key, error);
+      return 0;
+    }
+  }
+
+  async ping(): Promise<boolean> {
+    if (!this.client.isReady) {
+      this.connectInBackground();
+      return false;
+    }
+    try {
+      return (await this.client.ping()) === 'PONG';
+    } catch (error) {
+      this.logOperationError('PING', 'redis', error);
+      return false;
+    }
+  }
+
+  async consumeFixedWindow(
+    key: string,
+    limit: number,
+    windowSeconds: number,
+  ): Promise<{ count: number; retryAfterSeconds: number } | null> {
+    if (!this.client.isReady) {
+      this.connectInBackground();
+      return null;
+    }
+    try {
+      const result = (await this.client.eval(
+        `local count = redis.call('INCR', KEYS[1])
+         if count == 1 then
+           redis.call('EXPIRE', KEYS[1], ARGV[1])
+         end
+         local ttl = redis.call('TTL', KEYS[1])
+         return {count, ttl}`,
+        {
+          keys: [key],
+          arguments: [String(Math.max(1, Math.floor(windowSeconds)))],
+        },
+      )) as [number, number];
+      return {
+        count: Number(result[0]),
+        retryAfterSeconds: Math.max(1, Number(result[1])),
+      };
+    } catch (error) {
+      this.logOperationError('RATE_LIMIT', key, error);
+      return null;
+    }
+  }
+
+  /**
+   * Cache-aside with local single-flight and a short Redis lock. Concurrent
+   * misses no longer make every API instance execute the same database query.
+   */
+  async rememberJson<T>(
+    key: string,
+    ttlSeconds: number,
+    loader: () => Promise<T>,
+  ): Promise<T> {
+    const cached = await this.getJson<T>(key);
+    if (cached !== null) return cached;
+
+    const existing = this.inFlight.get(key) as Promise<T> | undefined;
+    if (existing) return existing;
+
+    const task = this.loadOnce(key, ttlSeconds, loader).finally(() => {
+      this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, task);
+    return task;
+  }
+
+  private async loadOnce<T>(
+    key: string,
+    ttlSeconds: number,
+    loader: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.client.isReady) {
+      return loader();
+    }
+
+    const lockKey = `lock:${key}`;
+    const token = randomUUID();
+    try {
+      const acquired = await this.client.set(lockKey, token, {
+        NX: true,
+        PX: 5_000,
+      });
+      if (acquired === 'OK') {
+        try {
+          const value = await loader();
+          await this.setJson(key, value, ttlSeconds);
+          return value;
+        } finally {
+          await this.client.eval(
+            `if redis.call('get', KEYS[1]) == ARGV[1] then
+               return redis.call('del', KEYS[1])
+             end
+             return 0`,
+            { keys: [lockKey], arguments: [token] },
+          );
+        }
+      }
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        const cached = await this.getJson<T>(key);
+        if (cached !== null) return cached;
+      }
+    } catch (error) {
+      this.logOperationError('REMEMBER', key, error);
+    }
+
+    // Lock owner may have failed or be slow. Availability wins over waiting.
+    const value = await loader();
+    await this.setJson(key, value, ttlSeconds);
+    return value;
   }
 
   private connectInBackground(): void {

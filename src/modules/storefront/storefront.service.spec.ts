@@ -8,11 +8,13 @@ import { StorefrontService } from './storefront.service';
 describe('StorefrontService category cache', () => {
   let service: StorefrontService;
   let categoriesRepository: { findAllActive: jest.Mock };
-  let cache: { getJson: jest.Mock; setJson: jest.Mock };
+  let cache: { rememberJson: jest.Mock };
 
   beforeEach(() => {
     categoriesRepository = { findAllActive: jest.fn() };
-    cache = { getJson: jest.fn(), setJson: jest.fn() };
+    cache = {
+      rememberJson: jest.fn((_key, _ttl, loader) => loader()),
+    };
     service = new StorefrontService(
       {} as ProductsRepository,
       categoriesRepository as unknown as CategoriesRepository,
@@ -23,16 +25,19 @@ describe('StorefrontService category cache', () => {
 
   it('returns Redis data without calling the database on cache hit', async () => {
     const cached = [{ id: 'category-1', name: 'Điện thoại' }];
-    cache.getJson.mockResolvedValue(cached);
+    cache.rememberJson.mockResolvedValue(cached);
 
     await expect(service.getCategories()).resolves.toEqual(cached);
-    expect(cache.getJson).toHaveBeenCalledWith(STOREFRONT_CATEGORIES_CACHE_KEY);
+    expect(cache.rememberJson).toHaveBeenCalledWith(
+      STOREFRONT_CATEGORIES_CACHE_KEY,
+      600,
+      expect.any(Function),
+    );
     expect(categoriesRepository.findAllActive).not.toHaveBeenCalled();
-    expect(cache.setJson).not.toHaveBeenCalled();
   });
 
   it('treats an empty cached list as a valid cache hit', async () => {
-    cache.getJson.mockResolvedValue([]);
+    cache.rememberJson.mockResolvedValue([]);
 
     await expect(service.getCategories()).resolves.toEqual([]);
     expect(categoriesRepository.findAllActive).not.toHaveBeenCalled();
@@ -40,15 +45,14 @@ describe('StorefrontService category cache', () => {
 
   it('loads from database and writes Redis with TTL on cache miss', async () => {
     const categories = [{ id: 'category-2', name: 'Laptop' }];
-    cache.getJson.mockResolvedValue(null);
     categoriesRepository.findAllActive.mockResolvedValue(categories);
 
     await expect(service.getCategories()).resolves.toEqual(categories);
     expect(categoriesRepository.findAllActive).toHaveBeenCalledTimes(1);
-    expect(cache.setJson).toHaveBeenCalledWith(
+    expect(cache.rememberJson).toHaveBeenCalledWith(
       STOREFRONT_CATEGORIES_CACHE_KEY,
-      categories,
       600,
+      expect.any(Function),
     );
   });
 });

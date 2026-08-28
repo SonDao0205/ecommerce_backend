@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
@@ -14,6 +15,9 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { CustomerAddressesModule } from './modules/customer-addresses/customer-addresses.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { RedisCacheModule } from './common/cache/redis-cache.module';
+import { RateLimitGuard } from './common/rate-limit/rate-limit.guard';
+import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -37,8 +41,21 @@ import { RedisCacheModule } from './common/cache/redis-cache.module';
         password: configService.get<string>('DB_PASSWORD', ''),
         database: configService.get<string>('DB_DATABASE', 'ecommerce_db'),
         autoLoadEntities: true, // Tự động load tất cả Entity được khai báo
-        synchronize: configService.get<string>('NODE_ENV') !== 'production', // Tương đương hibernate ddl-auto=update (chỉ dùng ở dev)
+        // Migrations are the schema source of truth. synchronize can silently
+        // remove indexes/triggers that are not represented by entity metadata.
+        synchronize:
+          configService.get<string>('DB_SYNCHRONIZE', 'false') === 'true' &&
+          configService.get<string>('NODE_ENV') !== 'production',
         logging: configService.get<string>('DB_LOGGING') === 'true', // Log SQL queries (giống spring.jpa.show-sql)
+        extra: {
+          max: Number(configService.get<string>('DB_POOL_MAX', '20')),
+          connectionTimeoutMillis: Number(
+            configService.get<string>('DB_POOL_CONNECTION_TIMEOUT_MS', '3000'),
+          ),
+          idleTimeoutMillis: Number(
+            configService.get<string>('DB_POOL_IDLE_TIMEOUT_MS', '30000'),
+          ),
+        },
       }),
     }),
 
@@ -61,8 +78,14 @@ import { RedisCacheModule } from './common/cache/redis-cache.module';
     CustomerAddressesModule,
 
     DashboardModule,
+
+    HealthModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, { provide: APP_GUARD, useClass: RateLimitGuard }],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestContextMiddleware).forRoutes('{*path}');
+  }
+}

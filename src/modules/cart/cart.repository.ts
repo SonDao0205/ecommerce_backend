@@ -93,6 +93,10 @@ interface CountRow {
   count: number | string;
 }
 
+export type AtomicCartWriteResult =
+  | { status: 'saved'; item: CartItem }
+  | { status: 'skipped' | 'stock_exceeded' };
+
 @Injectable()
 export class CartRepository {
   constructor(private readonly dataSource: DataSource) {}
@@ -294,6 +298,40 @@ export class CartRepository {
     const row = rows[0];
     if (!row) throw new Error('Không thể lưu sản phẩm trong giỏ hàng');
     return this.mapCartItem(row);
+  }
+
+  async addItemAtomic(
+    cartId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    maxQuantity: number,
+    ignoreExisting: boolean,
+  ): Promise<AtomicCartWriteResult> {
+    if (quantity > maxQuantity) return { status: 'stock_exceeded' };
+
+    const conflictTarget = variantId
+      ? `(cart_id, product_id, variant_id) WHERE variant_id IS NOT NULL`
+      : `(cart_id, product_id) WHERE variant_id IS NULL`;
+    const conflictAction = ignoreExisting
+      ? 'DO NOTHING'
+      : `DO UPDATE
+         SET quantity = cart_items.quantity + EXCLUDED.quantity,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE cart_items.quantity + EXCLUDED.quantity <= $5`;
+    const rows = await this.dataSource.query<RawCartItemRow[]>(
+      `INSERT INTO cart_items (cart_id, product_id, variant_id, quantity)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT ${conflictTarget} ${conflictAction}
+       RETURNING id, cart_id, product_id, variant_id, quantity,
+                 created_at, updated_at, deleted_at`,
+      ignoreExisting
+        ? [cartId, productId, variantId, quantity]
+        : [cartId, productId, variantId, quantity, maxQuantity],
+    );
+    const row = rows[0];
+    if (row) return { status: 'saved', item: this.mapCartItem(row) };
+    return { status: ignoreExisting ? 'skipped' : 'stock_exceeded' };
   }
 
   createItem(data: Partial<CartItem>): CartItem {

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Category, Product, ProductVariant } from '@entities';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryRunner } from 'typeorm';
 import { GetAllDto, SortOrder } from 'src/database/dtos/common/get_all.dto';
 import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { createPaginatedData } from '@common/pagination/create_paginated_data';
@@ -81,6 +81,22 @@ interface ExistsRow {
 
 interface SkuRow {
   sku: string;
+}
+
+export class ProductSkuConflictError extends Error {
+  constructor(public readonly skus: string[]) {
+    super('SKU sản phẩm hoặc biến thể đã tồn tại');
+    this.name = 'ProductSkuConflictError';
+  }
+}
+
+export class ProductVariantRemovalConflictError extends Error {
+  constructor() {
+    super(
+      'Không thể xóa biến thể còn tồn kho hoặc đang nằm trong đơn chưa xử lý xong',
+    );
+    this.name = 'ProductVariantRemovalConflictError';
+  }
 }
 
 @Injectable()
@@ -263,11 +279,41 @@ export class ProductsRepository {
     inventoryStock: number,
     actorId?: string,
   ): Promise<Product> {
+    return this.persistWithVariants(
+      product,
+      variants,
+      inventoryStock,
+      false,
+      actorId,
+    );
+  }
+
+  async updateWithVariants(
+    product: Product,
+    variants: ProductVariantGroupInput[],
+    actorId?: string,
+  ): Promise<Product> {
+    return this.persistWithVariants(product, variants, 0, true, actorId);
+  }
+
+  private async persistWithVariants(
+    product: Product,
+    variants: ProductVariantGroupInput[],
+    inventoryStock: number,
+    preserveExistingStock: boolean,
+    actorId?: string,
+  ): Promise<Product> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
       await setDatabaseAuditContext(queryRunner, { actorId });
+      await this.lockAndAssertSkus(
+        queryRunner,
+        product.sku,
+        variants.flatMap((group) => group.children.map((child) => child.sku)),
+        product.id,
+      );
       const savedProduct = await this.upsertProduct(
         product,
         async (sql, parameters) => {
@@ -338,14 +384,16 @@ export class ProductsRepository {
               existing.value !== child.value ||
               existing.sku !== child.sku ||
               Number(existing.unit_price) !== child.unitPrice ||
-              existing.stock !== child.stock ||
+              (!preserveExistingStock && existing.stock !== child.stock) ||
               existing.sort_order !== childIndex ||
               !existing.is_active
             ) {
               await queryRunner.query(
                 `UPDATE product_variants
                  SET parent_id = $3, name = $4, value = $5, sku = $6,
-                     unit_price = $7, stock = $8, sort_order = $9,
+                     unit_price = $7,
+                     stock = CASE WHEN $10 THEN stock ELSE $8 END,
+                     sort_order = $9,
                      is_active = TRUE, deleted_at = NULL,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $1 AND product_id = $2 AND parent_id IS NOT NULL`,
@@ -355,10 +403,11 @@ export class ProductsRepository {
                   parentId,
                   child.name,
                   child.value,
-                  child.sku,
+                  this.normalizeSku(child.sku),
                   child.unitPrice,
                   child.stock,
                   childIndex,
+                  preserveExistingStock,
                 ],
               );
             }
@@ -374,9 +423,9 @@ export class ProductsRepository {
                 parentId,
                 child.name,
                 child.value,
-                child.sku,
+                this.normalizeSku(child.sku),
                 child.unitPrice,
-                child.stock,
+                preserveExistingStock ? 0 : child.stock,
                 childIndex,
               ],
             )) as unknown as { id: string }[];
@@ -391,6 +440,27 @@ export class ProductsRepository {
         .filter((variant) => !retainedIds.has(variant.id))
         .map((variant) => variant.id);
       if (removedIds.length > 0) {
+        const [blockedVariant] = (await queryRunner.query(
+          `SELECT variant.id
+           FROM product_variants variant
+           WHERE variant.id = ANY($1::uuid[])
+             AND (
+               variant.stock <> 0
+               OR EXISTS (
+                 SELECT 1 FROM order_items item
+                 INNER JOIN orders order_row ON order_row.id = item.order_id
+                 WHERE item.variant_id = variant.id
+                   AND item.deleted_at IS NULL
+                   AND order_row.deleted_at IS NULL
+                   AND order_row.status IN (
+                     'pending', 'confirmed', 'processing', 'shipping'
+                   )
+               )
+             )
+           LIMIT 1`,
+          [removedIds],
+        )) as unknown as { id: string }[];
+        if (blockedVariant) throw new ProductVariantRemovalConflictError();
         await queryRunner.query(
           `UPDATE product_variants
            SET is_active = FALSE, deleted_at = CURRENT_TIMESTAMP,
@@ -399,6 +469,35 @@ export class ProductsRepository {
              AND deleted_at IS NULL`,
           [savedProduct.id, removedIds],
         );
+      }
+
+      let resolvedInventoryStock = inventoryStock;
+      if (preserveExistingStock) {
+        const [inventoryRow] = (await queryRunner.query(
+          `SELECT id, stock FROM inventories
+           WHERE product_id = $1 AND deleted_at IS NULL
+           LIMIT 1 FOR UPDATE`,
+          [savedProduct.id],
+        )) as unknown as { id: string; stock: number }[];
+        const [stockRow] = (await queryRunner.query(
+          `SELECT COUNT(v.id) AS leaf_count,
+                  COALESCE(SUM(v.stock), 0) AS variant_stock
+           FROM product_variants v
+           WHERE v.product_id = $1
+             AND v.deleted_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM product_variants child
+               WHERE child.parent_id = v.id AND child.deleted_at IS NULL
+             )`,
+          [savedProduct.id],
+        )) as unknown as {
+          leaf_count: string | number;
+          variant_stock: string | number;
+        }[];
+        resolvedInventoryStock =
+          Number(stockRow?.leaf_count ?? 0) > 0
+            ? Number(stockRow.variant_stock)
+            : Number(inventoryRow?.stock ?? 0);
       }
 
       await queryRunner.query(
@@ -411,7 +510,7 @@ export class ProductsRepository {
              updated_at = CURRENT_TIMESTAMP
          WHERE inventories.stock IS DISTINCT FROM EXCLUDED.stock
             OR inventories.deleted_at IS NOT NULL`,
-        [savedProduct.id, inventoryStock],
+        [savedProduct.id, resolvedInventoryStock],
       );
 
       await queryRunner.commitTransaction();
@@ -578,7 +677,7 @@ export class ProductsRepository {
       product.name,
       product.slug,
       product.description ?? null,
-      product.sku ?? null,
+      product.sku ? this.normalizeSku(product.sku) : null,
       product.unitPrice ?? 0,
       product.originalPrice ?? null,
       product.thumbnailUrl ?? null,
@@ -653,6 +752,49 @@ export class ProductsRepository {
     if (ids.has(id))
       throw new Error('ID biến thể bị trùng trong dữ liệu gửi lên');
     ids.add(id);
+  }
+
+  private async lockAndAssertSkus(
+    queryRunner: QueryRunner,
+    productSku: string | undefined,
+    variantSkus: string[],
+    excludeProductId?: string,
+  ): Promise<void> {
+    const normalizedSkus = Array.from(
+      new Set(
+        [productSku, ...variantSkus]
+          .filter((sku): sku is string => Boolean(sku?.trim()))
+          .map((sku) => this.normalizeSku(sku)),
+      ),
+    ).sort();
+    for (const sku of normalizedSkus) {
+      await queryRunner.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`ecommerce:sku:${sku}`],
+      );
+    }
+    if (normalizedSkus.length === 0) return;
+    const rows = (await queryRunner.query(
+      `SELECT sku FROM products
+       WHERE UPPER(sku) = ANY($1::text[])
+         AND deleted_at IS NULL
+         AND ($2::uuid IS NULL OR id <> $2)
+       UNION ALL
+       SELECT sku FROM product_variants
+       WHERE UPPER(sku) = ANY($1::text[])
+         AND deleted_at IS NULL
+         AND ($2::uuid IS NULL OR product_id <> $2)`,
+      [normalizedSkus, excludeProductId ?? null],
+    )) as unknown as SkuRow[];
+    if (rows.length > 0) {
+      throw new ProductSkuConflictError(
+        rows.map((row) => this.normalizeSku(row.sku)),
+      );
+    }
+  }
+
+  private normalizeSku(sku: string): string {
+    return sku.trim().toUpperCase();
   }
 
   private mapStorefrontProduct(row: RawProductRow): StorefrontProduct {

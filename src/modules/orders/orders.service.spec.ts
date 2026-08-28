@@ -3,8 +3,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { OrderStatus } from '@entities';
 import { OrderCreationError, OrdersRepository } from './orders.repository';
 import { OrdersService } from './orders.service';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
 
 describe('OrdersService', () => {
+  const idempotencyKey = '30000000-0000-4000-8000-000000000001';
   let service: OrdersService;
   let repository: {
     createFromCart: jest.Mock;
@@ -47,6 +49,10 @@ describe('OrdersService', () => {
       providers: [
         OrdersService,
         { provide: OrdersRepository, useValue: repository },
+        {
+          provide: RedisCacheService,
+          useValue: { increment: jest.fn().mockResolvedValue(1) },
+        },
       ],
     }).compile();
     service = module.get(OrdersService);
@@ -54,17 +60,22 @@ describe('OrdersService', () => {
 
   it('creates an order from the authenticated user cart', async () => {
     await expect(
-      service.createFromCart(order.userId, recipient()),
+      service.createFromCart(order.userId, recipient(), idempotencyKey),
     ).resolves.toEqual(order);
     expect(repository.createFromCart).toHaveBeenCalledWith(
       order.userId,
       recipient(),
+      expect.objectContaining({ key: idempotencyKey }),
     );
   });
 
   it('requires a product reference for buy now', async () => {
     await expect(
-      service.buyNow(order.userId, { ...recipient(), quantity: 1 }),
+      service.buyNow(
+        order.userId,
+        { ...recipient(), quantity: 1 },
+        idempotencyKey,
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -75,7 +86,7 @@ describe('OrdersService', () => {
       variantSku: 'PHONE-01-BLACK',
       quantity: 2,
     };
-    await service.buyNow(order.userId, item);
+    await service.buyNow(order.userId, item, idempotencyKey);
     expect(repository.createBuyNow).toHaveBeenCalledWith(
       order.userId,
       recipient(),
@@ -86,6 +97,7 @@ describe('OrdersService', () => {
         variantSku: 'PHONE-01-BLACK',
         quantity: 2,
       },
+      expect.objectContaining({ key: idempotencyKey }),
     );
   });
 
@@ -94,7 +106,7 @@ describe('OrdersService', () => {
       new OrderCreationError('STOCK_EXCEEDED', 'Không đủ tồn kho'),
     );
     await expect(
-      service.createFromCart(order.userId, recipient()),
+      service.createFromCart(order.userId, recipient(), idempotencyKey),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 

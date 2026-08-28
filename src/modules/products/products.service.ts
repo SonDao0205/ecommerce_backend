@@ -12,9 +12,14 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { ProductsRepository } from './products.repository';
 import type { ProductVariantGroupInput } from './products.repository';
+import { ProductSkuConflictError } from './products.repository';
+import { ProductVariantRemovalConflictError } from './products.repository';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import type { UploadedImage } from '../cloudinary/cloudinary.service';
 import { isUUID } from 'class-validator';
+import { UpdateProductDto } from './dto/update-product.dto';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
+import { DASHBOARD_CACHE_VERSION_KEY } from '../dashboard/dashboard-cache.constants';
 
 type ImageManifestItem =
   { kind: 'existing'; url: string } | { kind: 'new'; fileIndex: number };
@@ -24,6 +29,7 @@ export class ProductsService {
   constructor(
     private readonly productsRepository: ProductsRepository,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly cache: RedisCacheService,
   ) {}
 
   async getAllProducts(query: GetAllDto): Promise<PaginatedData<Product>> {
@@ -70,7 +76,7 @@ export class ProductsService {
       category: { id: categoryId },
     });
     try {
-      return actorId
+      const saved = actorId
         ? await this.productsRepository.saveWithVariants(
             newProduct,
             variants,
@@ -82,24 +88,31 @@ export class ProductsService {
             variants,
             inventoryStock,
           );
-    } catch {
+      await this.cache.increment(DASHBOARD_CACHE_VERSION_KEY);
+      return saved;
+    } catch (error) {
       await this.cloudinaryService.removeImages(uploaded);
+      if (error instanceof ProductSkuConflictError) {
+        throw new ConflictException({
+          message: 'SKU sản phẩm hoặc biến thể vừa được sử dụng.',
+          fieldErrors: { sku: error.skus.join(', ') },
+        });
+      }
       throw new InternalServerErrorException('Lỗi khi thêm sản phẩm!');
     }
   };
 
   updateProduct = async (
     id: string,
-    dto: CreateProductDto,
+    dto: UpdateProductDto,
     files: Express.Multer.File[] = [],
     actorId?: string,
   ): Promise<Product> => {
     const product = await this.findProductById(id);
     const { name, slug, description, sku, unitPrice, categoryId } = dto;
     const variants = dto.variants
-      ? this.resolveVariants(dto.variants)
+      ? this.resolveVariants(dto.variants, true)
       : this.toVariantInputs(product);
-    const inventoryStock = this.resolveInventoryStock(dto.stock, variants);
     await this.validateSkus(
       sku,
       variants.flatMap((group) => group.children.map((child) => child.sku)),
@@ -125,20 +138,26 @@ export class ProductsService {
     product.images = images;
     product.category = { id: categoryId };
     try {
-      return actorId
-        ? await this.productsRepository.saveWithVariants(
+      const saved = actorId
+        ? await this.productsRepository.updateWithVariants(
             product,
             variants,
-            inventoryStock,
             actorId,
           )
-        : await this.productsRepository.saveWithVariants(
-            product,
-            variants,
-            inventoryStock,
-          );
-    } catch {
+        : await this.productsRepository.updateWithVariants(product, variants);
+      await this.cache.increment(DASHBOARD_CACHE_VERSION_KEY);
+      return saved;
+    } catch (error) {
       await this.cloudinaryService.removeImages(uploaded);
+      if (error instanceof ProductSkuConflictError) {
+        throw new ConflictException({
+          message: 'SKU sản phẩm hoặc biến thể vừa được sử dụng.',
+          fieldErrors: { sku: error.skus.join(', ') },
+        });
+      }
+      if (error instanceof ProductVariantRemovalConflictError) {
+        throw new ConflictException(error.message);
+      }
       throw new InternalServerErrorException('Lỗi khi cập nhật sản phẩm!');
     }
   };
@@ -148,7 +167,9 @@ export class ProductsService {
     if (!product) throw new NotFoundException('Không tìm thấy sản phẩm!');
     product.isActive = isActive;
     try {
-      return await this.productsRepository.save(product, actorId);
+      const saved = await this.productsRepository.save(product, actorId);
+      await this.cache.increment(DASHBOARD_CACHE_VERSION_KEY);
+      return saved;
     } catch {
       throw new InternalServerErrorException(
         `Lỗi khi ${isActive ? 'hiện' : 'ẩn'} sản phẩm!`,
@@ -280,7 +301,10 @@ export class ProductsService {
     return images[dto.thumbnailIndex];
   }
 
-  private resolveVariants(raw?: string): ProductVariantGroupInput[] {
+  private resolveVariants(
+    raw?: string,
+    preserveExistingStock = false,
+  ): ProductVariantGroupInput[] {
     if (!raw) return [];
     let value: unknown;
     try {
@@ -310,14 +334,14 @@ export class ProductsService {
           throw new BadRequestException('Biến thể con không hợp lệ');
         }
         const unitPrice = Number(child.unitPrice);
-        const stock = Number(child.stock);
+        const stock = preserveExistingStock ? 0 : Number(child.stock);
         const childId = this.optionalUuid(child.id, 'ID biến thể con');
         if (!Number.isFinite(unitPrice) || unitPrice < 0) {
           throw new BadRequestException(
             'Giá biến thể phải lớn hơn hoặc bằng 0',
           );
         }
-        if (!Number.isInteger(stock) || stock < 0) {
+        if (!preserveExistingStock && (!Number.isInteger(stock) || stock < 0)) {
           throw new BadRequestException(
             'Tồn kho biến thể phải là số nguyên không âm',
           );

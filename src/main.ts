@@ -2,9 +2,33 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import helmet from 'helmet';
+import compression from 'compression';
+import { json, urlencoded } from 'express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  const isProduction = process.env.NODE_ENV === 'production';
+  const swaggerEnabled = process.env.ENABLE_SWAGGER === 'true' || !isProduction;
+
+  app.use(
+    helmet({
+      // Swagger UI uses inline assets in development. Production Swagger is
+      // disabled by default, so Helmet can use its strict default CSP there.
+      contentSecurityPolicy: swaggerEnabled ? false : undefined,
+    }),
+  );
+  if (process.env.ENABLE_COMPRESSION !== 'false') {
+    app.use(compression({ threshold: 1024 }));
+  }
+  const bodyLimit = process.env.HTTP_BODY_LIMIT ?? '1mb';
+  app.use(json({ limit: bodyLimit }));
+  app.use(urlencoded({ extended: true, limit: bodyLimit }));
+  const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+  if (trustProxyHops > 0) {
+    app.getHttpAdapter().getInstance().set('trust proxy', trustProxyHops);
+  }
+  app.enableShutdownHooks();
 
   const allowedOrigins = (
     process.env.FRONTEND_URLS ??
@@ -33,18 +57,22 @@ async function bootstrap() {
   );
 
   // 3. Cấu hình Swagger / OpenAPI (giống SpringDoc OpenAPI)
-  const config = new DocumentBuilder()
-    .setTitle('E-Commerce API')
-    .setDescription('Tài liệu API hệ thống E-Commerce')
-    .setVersion('1.0')
-    .addBearerAuth() // Thêm nút Authorize JWT trên giao diện Swagger
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  if (swaggerEnabled) {
+    const config = new DocumentBuilder()
+      .setTitle('E-Commerce API')
+      .setDescription('Tài liệu API hệ thống E-Commerce')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   const port = process.env.PORT ?? 8080;
   await app.listen(port);
   console.log(`🚀 Server đang chạy tại: http://localhost:${port}/api`);
-  console.log(`📄 Swagger UI: http://localhost:${port}/api/docs`);
+  if (swaggerEnabled) {
+    console.log(`📄 Swagger UI: http://localhost:${port}/api/docs`);
+  }
 }
 void bootstrap();

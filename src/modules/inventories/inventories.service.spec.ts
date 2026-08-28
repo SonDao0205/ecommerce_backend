@@ -5,6 +5,7 @@ import {
   InventoryUpdateError,
 } from './inventories.repository';
 import { InventoriesService } from './inventories.service';
+import { RedisCacheService } from '@common/cache/redis-cache.service';
 
 describe('InventoriesService', () => {
   let service: InventoriesService;
@@ -16,6 +17,10 @@ describe('InventoriesService', () => {
       providers: [
         InventoriesService,
         { provide: InventoriesRepository, useValue: repository },
+        {
+          provide: RedisCacheService,
+          useValue: { increment: jest.fn().mockResolvedValue(1) },
+        },
       ],
     }).compile();
     service = module.get(InventoriesService);

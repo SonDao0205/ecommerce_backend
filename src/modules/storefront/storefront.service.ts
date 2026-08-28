@@ -35,19 +35,14 @@ export class StorefrontService {
   }
 
   async getCategories(): Promise<Category[]> {
-    const cached = await this.cache.getJson<Category[]>(
-      STOREFRONT_CATEGORIES_CACHE_KEY,
-    );
-    if (cached !== null) return cached;
-
-    const categories = await this.categoriesRepository.findAllActive();
     const ttl = Number(
       this.configService.get<string>(
         'STOREFRONT_CATEGORIES_CACHE_TTL_SECONDS',
         '600',
       ),
     );
-    await this.cache.setJson(STOREFRONT_CATEGORIES_CACHE_KEY, categories, ttl);
-    return categories;
+    return this.cache.rememberJson(STOREFRONT_CATEGORIES_CACHE_KEY, ttl, () =>
+      this.categoriesRepository.findAllActive(),
+    );
   }
 }
