@@ -22,6 +22,9 @@ export class CustomerAddress extends BaseEntity {
   @Column({ type: 'varchar', length: 20 })
   phone?: string;
 
+  @Column({ type: 'varchar', length: 254, nullable: true })
+  email?: string | null;
+
   @Column({ type: 'text' })
   address?: string;
 

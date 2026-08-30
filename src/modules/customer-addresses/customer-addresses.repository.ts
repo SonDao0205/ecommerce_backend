@@ -8,6 +8,7 @@ export interface CustomerAddressView {
   userId: string;
   recipientName: string;
   phone: string;
+  email: string | null;
   address: string;
   isDefault: boolean;
   createdAt: Date;
@@ -17,6 +18,7 @@ export interface CustomerAddressView {
 export interface CustomerAddressInput {
   recipientName: string;
   phone: string;
+  email?: string;
   address: string;
   isDefault?: boolean;
 }
@@ -26,6 +28,7 @@ interface RawCustomerAddress {
   user_id: string;
   recipient_name: string;
   phone: string;
+  email: string | null;
   address: string;
   is_default: boolean;
   created_at: Date;
@@ -84,11 +87,18 @@ export class CustomerAddressesRepository {
 
       const [row] = (await queryRunner.query(
         `INSERT INTO customer_addresses
-           (user_id, recipient_name, phone, address, is_default)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, user_id, recipient_name, phone, address, is_default,
+           (user_id, recipient_name, phone, email, address, is_default)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, user_id, recipient_name, phone, email, address, is_default,
                    created_at, updated_at`,
-        [userId, input.recipientName, input.phone, input.address, isDefault],
+        [
+          userId,
+          input.recipientName,
+          input.phone,
+          input.email ?? null,
+          input.address,
+          isDefault,
+        ],
       )) as RawCustomerAddress[];
       if (!row) throw new Error('Không thể lưu địa chỉ khách hàng');
       return this.map(row);
@@ -110,12 +120,19 @@ export class CustomerAddressesRepository {
       if (current) {
         const result: unknown = await queryRunner.query(
           `UPDATE customer_addresses
-           SET recipient_name = $2, phone = $3, address = $4,
+           SET recipient_name = $2, phone = $3,
+               email = COALESCE($4, email), address = $5,
                updated_at = CURRENT_TIMESTAMP
            WHERE id = $1
-           RETURNING id, user_id, recipient_name, phone, address, is_default,
+           RETURNING id, user_id, recipient_name, phone, email, address, is_default,
                      created_at, updated_at`,
-          [current.id, input.recipientName, input.phone, input.address],
+          [
+            current.id,
+            input.recipientName,
+            input.phone,
+            input.email ?? null,
+            input.address,
+          ],
         );
         const [row] = extractPostgresRows<RawCustomerAddress>(result);
         if (!row) throw new Error('Không thể cập nhật địa chỉ mặc định');
@@ -125,11 +142,17 @@ export class CustomerAddressesRepository {
       await this.clearDefault(queryRunner, userId);
       const [row] = (await queryRunner.query(
         `INSERT INTO customer_addresses
-           (user_id, recipient_name, phone, address, is_default)
-         VALUES ($1, $2, $3, $4, TRUE)
-         RETURNING id, user_id, recipient_name, phone, address, is_default,
+           (user_id, recipient_name, phone, email, address, is_default)
+         VALUES ($1, $2, $3, $4, $5, TRUE)
+         RETURNING id, user_id, recipient_name, phone, email, address, is_default,
                    created_at, updated_at`,
-        [userId, input.recipientName, input.phone, input.address],
+        [
+          userId,
+          input.recipientName,
+          input.phone,
+          input.email ?? null,
+          input.address,
+        ],
       )) as RawCustomerAddress[];
       if (!row) throw new Error('Không thể lưu địa chỉ mặc định');
       return this.map(row);
@@ -156,17 +179,19 @@ export class CustomerAddressesRepository {
         `UPDATE customer_addresses
          SET recipient_name = COALESCE($3, recipient_name),
              phone = COALESCE($4, phone),
-             address = COALESCE($5, address),
-             is_default = CASE WHEN $6::boolean IS NULL THEN is_default ELSE $6 END,
+             email = COALESCE($5, email),
+             address = COALESCE($6, address),
+             is_default = CASE WHEN $7::boolean IS NULL THEN is_default ELSE $7 END,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
-         RETURNING id, user_id, recipient_name, phone, address, is_default,
+         RETURNING id, user_id, recipient_name, phone, email, address, is_default,
                    created_at, updated_at`,
         [
           id,
           userId,
           input.recipientName ?? null,
           input.phone ?? null,
+          input.email ?? null,
           input.address ?? null,
           input.isDefault ?? null,
         ],
@@ -244,7 +269,7 @@ export class CustomerAddressesRepository {
     );
   }
 
-  private readonly selectSql = `SELECT id, user_id, recipient_name, phone,
+  private readonly selectSql = `SELECT id, user_id, recipient_name, phone, email,
                                         address, is_default, created_at, updated_at
                                  FROM customer_addresses`;
 
@@ -254,6 +279,7 @@ export class CustomerAddressesRepository {
       userId: row.user_id,
       recipientName: row.recipient_name,
       phone: row.phone,
+      email: row.email,
       address: row.address,
       isDefault: row.is_default,
       createdAt: row.created_at,

@@ -1,6 +1,7 @@
 import { Transform, TransformFnParams } from 'class-transformer';
 import {
   IsBoolean,
+  IsEmail,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -25,6 +26,12 @@ export class CreateCustomerAddressDto {
   })
   @MaxLength(20)
   phone!: string;
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsEmail({}, { message: 'Email không đúng định dạng' })
+  @MaxLength(254)
+  email?: string;
 
   @Transform(trimString)
   @IsString()
@@ -53,6 +60,12 @@ export class UpdateCustomerAddressDto {
   })
   @MaxLength(20)
   phone?: string;
+
+  @IsOptional()
+  @Transform(trimString)
+  @IsEmail({}, { message: 'Email không đúng định dạng' })
+  @MaxLength(254)
+  email?: string;
 
   @IsOptional()
   @Transform(trimString)
