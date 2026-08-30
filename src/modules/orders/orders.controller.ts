@@ -30,11 +30,33 @@ import {
   RequestOrderReturnDto,
   ReviewOrderReturnDto,
 } from './dto/order-action.dto';
+import { VoucherPreviewDto } from './dto/voucher-preview.dto';
+import { VoucherPreviewView } from './orders.repository';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  @Roles(UserRoleEnum.CUSTOMER)
+  @Post('voucher-preview')
+  @RateLimit({
+    limit: 30,
+    windowSeconds: 60,
+    scope: 'identity',
+    keyPrefix: 'orders:voucher-preview',
+  })
+  async previewVoucher(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: VoucherPreviewDto,
+  ): Promise<ApiResponseData<VoucherPreviewView>> {
+    return {
+      status: true,
+      message: 'Áp dụng voucher thành công!',
+      data: await this.ordersService.previewVoucher(req.user.id!, dto),
+      code: 200,
+    };
+  }
 
   @Get('my')
   async getMyOrders(

@@ -6,6 +6,10 @@ import { extractPostgresRows } from '@common/database/postgres-query-result';
 import { OrderReturnEvidence, OrderStatus } from '@entities';
 import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { OrderQueryDto } from './dto/order-query.dto';
+import {
+  VoucherPreviewDto,
+  VoucherPreviewMode,
+} from './dto/voucher-preview.dto';
 
 export type OrderCreationErrorCode =
   | 'CART_EMPTY'
@@ -15,6 +19,7 @@ export type OrderCreationErrorCode =
   | 'VARIANT_INVALID'
   | 'INVENTORY_MISSING'
   | 'STOCK_EXCEEDED'
+  | 'VOUCHER_INVALID'
   | 'IDEMPOTENCY_KEY_REUSED';
 
 export class OrderCreationError extends Error {
@@ -66,6 +71,10 @@ export interface OrderView {
   userId: string;
   status: OrderStatus;
   totalAmount: number;
+  subtotalAmount: number;
+  discountAmount: number;
+  voucherId: string | null;
+  voucherCode: string | null;
   shippingAddress: string;
   recipientName: string;
   recipientPhone: string;
@@ -95,6 +104,13 @@ export interface OrderSummaryView extends Omit<OrderView, 'items'> {
   itemCount: number;
 }
 
+export interface VoucherPreviewView {
+  code: string;
+  subtotalAmount: number;
+  discountAmount: number;
+  totalAmount: number;
+}
+
 interface RequestedLine {
   productId?: string;
   productSku?: string;
@@ -114,6 +130,7 @@ interface RawProduct {
   name: string;
   sku: string | null;
   unit_price: number | string;
+  category_id: string | null;
 }
 
 interface RawVariant {
@@ -139,6 +156,10 @@ interface RawOrder {
   user_id: string;
   status: OrderStatus;
   total_amount: number | string;
+  subtotal_amount: number | string;
+  discount_amount: number | string;
+  voucher_id: string | null;
+  voucher_code: string | null;
   shipping_address: string;
   recipient_name: string;
   recipient_phone: string;
@@ -181,9 +202,205 @@ interface CountRow {
   count: number | string;
 }
 
+interface LockedVoucher {
+  id: string;
+  code: string;
+  status: string;
+  discount_type: 'percentage' | 'fixed_amount';
+  discount_value: number | string;
+  max_discount_amount: number | string | null;
+  minimum_order_amount: number | string;
+  scope: 'shop' | 'products' | 'categories';
+  audience:
+    | 'all'
+    | 'new_customers'
+    | 'existing_customers'
+    | 'member_groups'
+    | 'specific_customers';
+  issued_quantity: number | null;
+  max_usage_count: number | null;
+  usage_limit_per_user: number;
+  used_count: number;
+}
+
 @Injectable()
 export class OrdersRepository {
   constructor(private readonly dataSource: DataSource) {}
+
+  async previewVoucher(
+    userId: string,
+    dto: VoucherPreviewDto,
+  ): Promise<VoucherPreviewView> {
+    const lines =
+      dto.mode === VoucherPreviewMode.CART
+        ? await this.dataSource.query<
+            Array<{
+              product_id: string;
+              category_id: string | null;
+              subtotal: string | number;
+            }>
+          >(
+            `SELECT p.id AS product_id, p.category_id,
+                  (COALESCE(pv.unit_price, p.unit_price) * ci.quantity) AS subtotal
+           FROM carts c INNER JOIN cart_items ci ON ci.cart_id = c.id AND ci.deleted_at IS NULL
+           INNER JOIN products p ON p.id = ci.product_id AND p.deleted_at IS NULL AND p.is_active = TRUE
+           LEFT JOIN product_variants pv ON pv.id = ci.variant_id AND pv.deleted_at IS NULL AND pv.is_active = TRUE
+           WHERE c.user_id = $1 AND c.deleted_at IS NULL`,
+            [userId],
+          )
+        : await this.previewBuyNowLines(dto);
+    if (!lines.length)
+      throw new OrderCreationError(
+        'CART_EMPTY',
+        'Không có sản phẩm để áp dụng voucher!',
+      );
+    const subtotal = lines.reduce(
+      (sum, line) => sum + Number(line.subtotal),
+      0,
+    );
+    const [voucher] = await this.dataSource.query<LockedVoucher[]>(
+      `SELECT id, code, status, discount_type, discount_value, max_discount_amount,
+              minimum_order_amount, scope, audience, issued_quantity, max_usage_count,
+              usage_limit_per_user, used_count
+       FROM vouchers WHERE UPPER(code) = UPPER($1) AND deleted_at IS NULL LIMIT 1`,
+      [dto.code],
+    );
+    const invalid = (message: string): never => {
+      throw new OrderCreationError('VOUCHER_INVALID', message);
+    };
+    if (!voucher) invalid('Mã voucher không tồn tại!');
+    const [validity] = await this.dataSource.query<Array<{ valid: boolean }>>(
+      `SELECT (status = 'active' AND start_at <= CURRENT_TIMESTAMP AND end_at > CURRENT_TIMESTAMP) AS valid FROM vouchers WHERE id = $1`,
+      [voucher.id],
+    );
+    if (!validity?.valid)
+      invalid('Voucher chưa có hiệu lực, đã hết hạn hoặc đã bị tắt!');
+    const limit = Math.min(
+      voucher.issued_quantity ?? Number.MAX_SAFE_INTEGER,
+      voucher.max_usage_count ?? Number.MAX_SAFE_INTEGER,
+    );
+    if (voucher.used_count >= limit) invalid('Voucher đã hết lượt sử dụng!');
+    const [usage] = await this.dataSource.query<CountRow[]>(
+      `SELECT COUNT(*) AS count FROM voucher_redemptions WHERE voucher_id = $1 AND user_id = $2`,
+      [voucher.id, userId],
+    );
+    if (Number(usage?.count ?? 0) >= voucher.usage_limit_per_user)
+      invalid('Bạn đã dùng hết số lượt cho voucher này!');
+    await this.assertPreviewAudience(voucher, userId, invalid);
+    if (subtotal < Number(voucher.minimum_order_amount))
+      invalid('Đơn hàng chưa đạt giá trị tối thiểu của voucher!');
+    let eligibleAmount = subtotal;
+    if (voucher.scope !== 'shop') {
+      const allowed =
+        voucher.scope === 'products'
+          ? await this.dataSource.query<Array<{ id: string }>>(
+              `SELECT product_id AS id FROM voucher_products WHERE voucher_id = $1`,
+              [voucher.id],
+            )
+          : await this.dataSource.query<Array<{ id: string }>>(
+              `SELECT category_id AS id FROM voucher_categories WHERE voucher_id = $1`,
+              [voucher.id],
+            );
+      const ids = new Set(allowed.map((row) => row.id));
+      eligibleAmount = lines
+        .filter((line) =>
+          ids.has(
+            voucher.scope === 'products'
+              ? line.product_id
+              : (line.category_id ?? ''),
+          ),
+        )
+        .reduce((sum, line) => sum + Number(line.subtotal), 0);
+      if (eligibleAmount <= 0)
+        invalid('Voucher không áp dụng cho sản phẩm trong đơn hàng!');
+    }
+    let discount =
+      voucher.discount_type === 'percentage'
+        ? (eligibleAmount * Number(voucher.discount_value)) / 100
+        : Number(voucher.discount_value);
+    if (voucher.max_discount_amount != null)
+      discount = Math.min(discount, Number(voucher.max_discount_amount));
+    discount = Math.min(
+      Math.round(discount * 100) / 100,
+      eligibleAmount,
+      subtotal,
+    );
+    return {
+      code: voucher.code,
+      subtotalAmount: subtotal,
+      discountAmount: discount,
+      totalAmount: subtotal - discount,
+    };
+  }
+
+  private async previewBuyNowLines(dto: VoucherPreviewDto) {
+    if ((!dto.productId && !dto.productSku) || !dto.quantity)
+      throw new OrderCreationError(
+        'PRODUCT_REFERENCE_REQUIRED',
+        'Thiếu thông tin sản phẩm mua ngay!',
+      );
+    const rows = await this.dataSource.query<
+      Array<{
+        product_id: string;
+        category_id: string | null;
+        subtotal: string | number;
+      }>
+    >(
+      `SELECT p.id AS product_id, p.category_id,
+              (COALESCE(pv.unit_price, p.unit_price) * $3::integer) AS subtotal
+       FROM products p
+       LEFT JOIN product_variants pv ON ($2::text IS NOT NULL) AND
+         (pv.id::text = $2 OR LOWER(pv.sku) = LOWER($2)) AND pv.product_id = p.id
+         AND pv.deleted_at IS NULL AND pv.is_active = TRUE
+       WHERE (p.id::text = $1 OR LOWER(p.sku) = LOWER($1))
+         AND p.deleted_at IS NULL AND p.is_active = TRUE LIMIT 1`,
+      [
+        dto.productId ?? dto.productSku,
+        dto.variantId ?? dto.variantSku ?? null,
+        dto.quantity,
+      ],
+    );
+    if (!rows.length)
+      throw new OrderCreationError(
+        'PRODUCT_UNAVAILABLE',
+        'Sản phẩm hoặc biến thể không còn khả dụng!',
+      );
+    return rows;
+  }
+
+  private async assertPreviewAudience(
+    voucher: LockedVoucher,
+    userId: string,
+    invalid: (message: string) => never,
+  ): Promise<void> {
+    if (voucher.audience === 'all') return;
+    if (voucher.audience === 'specific_customers') {
+      const rows = await this.dataSource.query(
+        `SELECT 1 FROM voucher_customers WHERE voucher_id = $1 AND user_id = $2`,
+        [voucher.id, userId],
+      );
+      if (!rows.length) invalid('Voucher không dành cho tài khoản này!');
+      return;
+    }
+    if (voucher.audience === 'member_groups') {
+      const rows = await this.dataSource.query(
+        `SELECT 1 FROM voucher_customer_groups vcg INNER JOIN customer_group_members cgm ON cgm.group_id = vcg.group_id WHERE vcg.voucher_id = $1 AND cgm.user_id = $2 LIMIT 1`,
+        [voucher.id, userId],
+      );
+      if (!rows.length)
+        invalid('Tài khoản không thuộc nhóm thành viên được áp dụng!');
+      return;
+    }
+    const [history] = await this.dataSource.query<CountRow[]>(
+      `SELECT COUNT(*) AS count FROM orders WHERE user_id = $1 AND deleted_at IS NULL AND status NOT IN ('cancelled','rejected')`,
+      [userId],
+    );
+    const hasOrder = Number(history?.count ?? 0) > 0;
+    if (voucher.audience === 'new_customers' && hasOrder)
+      invalid('Voucher chỉ dành cho khách hàng mới!');
+    if (voucher.audience === 'existing_customers' && !hasOrder)
+      invalid('Voucher chỉ dành cho khách hàng cũ!');
+  }
 
   async findAll(
     query: OrderQueryDto,
@@ -229,6 +446,7 @@ export class OrdersRepository {
     const offsetParameter = addParameter(query.skip);
     const rows = (await this.dataSource.query(
       `SELECT o.id, o.order_code, o.user_id, o.status, o.total_amount,
+              o.subtotal_amount, o.discount_amount, o.voucher_id, o.voucher_code,
               o.shipping_address, o.recipient_name, o.recipient_phone, o.note,
               o.rejection_reason, o.rejected_at, o.confirmed_at,
               o.cancellation_reason, o.cancelled_at, o.cancelled_by,
@@ -271,6 +489,7 @@ export class OrdersRepository {
     if (userId) parameters.push(userId);
     const rows = (await this.dataSource.query(
       `SELECT o.id, o.order_code, o.user_id, o.status, o.total_amount,
+              o.subtotal_amount, o.discount_amount, o.voucher_id, o.voucher_code,
               o.shipping_address, o.recipient_name, o.recipient_phone, o.note,
               o.rejection_reason, o.rejected_at, o.confirmed_at,
               o.cancellation_reason, o.cancelled_at, o.cancelled_by,
@@ -552,6 +771,7 @@ export class OrdersRepository {
     userId: string,
     recipient: OrderRecipientInput,
     idempotency: OrderIdempotencyInput,
+    voucherCode?: string,
   ): Promise<OrderView> {
     return this.createOrder(
       userId,
@@ -579,6 +799,7 @@ export class OrdersRepository {
       },
       true,
       idempotency,
+      voucherCode,
     );
   }
 
@@ -587,6 +808,7 @@ export class OrdersRepository {
     recipient: OrderRecipientInput,
     item: BuyNowInput,
     idempotency: OrderIdempotencyInput,
+    voucherCode?: string,
   ): Promise<OrderView> {
     return this.createOrder(
       userId,
@@ -594,6 +816,7 @@ export class OrdersRepository {
       () => Promise.resolve([item]),
       false,
       idempotency,
+      voucherCode,
     );
   }
 
@@ -603,6 +826,7 @@ export class OrdersRepository {
     loadLines: (queryRunner: QueryRunner) => Promise<RequestedLine[]>,
     clearCart: boolean,
     idempotency: OrderIdempotencyInput,
+    voucherCode?: string,
   ): Promise<OrderView> {
     const existing = await this.findByIdempotencyKey(userId, idempotency);
     if (existing) return existing;
@@ -615,6 +839,7 @@ export class OrdersRepository {
           loadLines,
           clearCart,
           idempotency,
+          voucherCode,
         );
       } catch (error) {
         if (!this.isRetryableTransactionError(error) || attempt === 3) {
@@ -631,6 +856,7 @@ export class OrdersRepository {
     loadLines: (queryRunner: QueryRunner) => Promise<RequestedLine[]>,
     clearCart: boolean,
     idempotency: OrderIdempotencyInput,
+    voucherCode?: string,
   ): Promise<OrderView> {
     const queryRunner = this.dataSource.createQueryRunner();
     let released = false;
@@ -656,11 +882,32 @@ export class OrdersRepository {
         totalAmount += item.subtotal;
       }
 
+      const voucher = voucherCode
+        ? await this.redeemVoucher(
+            queryRunner,
+            voucherCode,
+            userId,
+            order.id,
+            items,
+            totalAmount,
+          )
+        : null;
+      const discountAmount = voucher?.discountAmount ?? 0;
+      const payableAmount = Math.max(totalAmount - discountAmount, 0);
+
       await queryRunner.query(
         `UPDATE orders
-         SET total_amount = $2, updated_at = CURRENT_TIMESTAMP
+         SET subtotal_amount = $2, discount_amount = $3, total_amount = $4,
+             voucher_id = $5, voucher_code = $6, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
-        [order.id, totalAmount],
+        [
+          order.id,
+          totalAmount,
+          discountAmount,
+          payableAmount,
+          voucher?.voucherId ?? null,
+          voucher?.voucherCode ?? null,
+        ],
       );
       if (clearCart) {
         await queryRunner.query(
@@ -679,7 +926,11 @@ export class OrdersRepository {
         orderCode: order.order_code,
         userId: order.user_id,
         status: order.status,
-        totalAmount,
+        totalAmount: payableAmount,
+        subtotalAmount: totalAmount,
+        discountAmount,
+        voucherId: voucher?.voucherId ?? null,
+        voucherCode: voucher?.voucherCode ?? null,
         shippingAddress: order.shipping_address,
         recipientName: order.recipient_name,
         recipientPhone: order.recipient_phone,
@@ -855,7 +1106,7 @@ export class OrdersRepository {
     line: RequestedLine,
   ): Promise<RawProduct> {
     const rows = (await queryRunner.query(
-      `SELECT p.id, p.name, p.sku, p.unit_price
+      `SELECT p.id, p.name, p.sku, p.unit_price, p.category_id
        FROM products p
        WHERE ${line.productId ? 'p.id = $1' : 'LOWER(p.sku) = LOWER($1)'}
          AND p.is_active = TRUE
@@ -966,6 +1217,159 @@ export class OrdersRepository {
     return Number(row?.count ?? 0);
   }
 
+  /**
+   * Locks the voucher row and records redemption in the same transaction as
+   * stock reservation and order creation. Concurrent checkouts therefore
+   * serialize on this row and cannot exceed either global or per-user limits.
+   */
+  private async redeemVoucher(
+    queryRunner: QueryRunner,
+    code: string,
+    userId: string,
+    orderId: string,
+    items: OrderItemView[],
+    subtotal: number,
+  ): Promise<{
+    voucherId: string;
+    voucherCode: string;
+    discountAmount: number;
+  }> {
+    const [voucher] = (await queryRunner.query(
+      `SELECT id, code, status, discount_type, discount_value,
+              max_discount_amount, minimum_order_amount, scope, audience,
+              issued_quantity, max_usage_count, usage_limit_per_user, used_count
+       FROM vouchers
+       WHERE UPPER(code) = UPPER($1) AND deleted_at IS NULL
+       LIMIT 1 FOR UPDATE`,
+      [code],
+    )) as unknown as LockedVoucher[];
+    const invalid = (message: string): never => {
+      throw new OrderCreationError('VOUCHER_INVALID', message);
+    };
+    if (!voucher) invalid('Mã voucher không tồn tại!');
+    const [time] = (await queryRunner.query(
+      `SELECT (status = 'active' AND start_at <= CURRENT_TIMESTAMP AND end_at > CURRENT_TIMESTAMP) AS valid
+       FROM vouchers WHERE id = $1`,
+      [voucher.id],
+    )) as unknown as Array<{ valid: boolean }>;
+    if (!time?.valid)
+      invalid('Voucher chưa có hiệu lực, đã hết hạn hoặc đã bị tắt!');
+    const effectiveLimit = Math.min(
+      voucher.issued_quantity ?? Number.MAX_SAFE_INTEGER,
+      voucher.max_usage_count ?? Number.MAX_SAFE_INTEGER,
+    );
+    if (voucher.used_count >= effectiveLimit)
+      invalid('Voucher đã hết lượt sử dụng!');
+
+    const [usage] = (await queryRunner.query(
+      `SELECT COUNT(*) AS count FROM voucher_redemptions WHERE voucher_id = $1 AND user_id = $2`,
+      [voucher.id, userId],
+    )) as unknown as CountRow[];
+    if (Number(usage?.count ?? 0) >= voucher.usage_limit_per_user)
+      invalid('Bạn đã dùng hết số lượt cho voucher này!');
+
+    await this.assertVoucherAudience(
+      queryRunner,
+      voucher,
+      userId,
+      orderId,
+      invalid,
+    );
+    if (subtotal < Number(voucher.minimum_order_amount))
+      invalid('Đơn hàng chưa đạt giá trị tối thiểu của voucher!');
+
+    let eligibleAmount = subtotal;
+    if (voucher.scope !== 'shop') {
+      const productIds = items
+        .map((item) => item.productId)
+        .filter((id): id is string => Boolean(id));
+      const rows = (await queryRunner.query(
+        voucher.scope === 'products'
+          ? `SELECT product_id AS id FROM voucher_products WHERE voucher_id = $1 AND product_id = ANY($2::uuid[])`
+          : `SELECT p.id FROM products p INNER JOIN voucher_categories vc ON vc.category_id = p.category_id AND vc.voucher_id = $1 WHERE p.id = ANY($2::uuid[])`,
+        [voucher.id, productIds],
+      )) as unknown as Array<{ id: string }>;
+      const eligibleIds = new Set(rows.map((row) => row.id));
+      eligibleAmount = items
+        .filter((item) => item.productId && eligibleIds.has(item.productId))
+        .reduce((sum, item) => sum + item.subtotal, 0);
+      if (eligibleAmount <= 0)
+        invalid('Voucher không áp dụng cho sản phẩm trong đơn hàng!');
+    }
+
+    let discountAmount =
+      voucher.discount_type === 'percentage'
+        ? (eligibleAmount * Number(voucher.discount_value)) / 100
+        : Number(voucher.discount_value);
+    if (voucher.max_discount_amount != null)
+      discountAmount = Math.min(
+        discountAmount,
+        Number(voucher.max_discount_amount),
+      );
+    discountAmount = Math.min(
+      Math.round(discountAmount * 100) / 100,
+      eligibleAmount,
+      subtotal,
+    );
+
+    const result: unknown = await queryRunner.query(
+      `UPDATE vouchers SET used_count = used_count + 1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND used_count = $2
+         AND ($3::integer IS NULL OR used_count < $3)
+         AND ($4::integer IS NULL OR used_count < $4)
+       RETURNING id`,
+      [
+        voucher.id,
+        voucher.used_count,
+        voucher.issued_quantity,
+        voucher.max_usage_count,
+      ],
+    );
+    if (extractPostgresRows<{ id: string }>(result).length === 0)
+      invalid('Voucher vừa hết lượt sử dụng!');
+    await queryRunner.query(
+      `INSERT INTO voucher_redemptions (voucher_id, user_id, order_id, discount_amount) VALUES ($1, $2, $3, $4)`,
+      [voucher.id, userId, orderId, discountAmount],
+    );
+    return { voucherId: voucher.id, voucherCode: voucher.code, discountAmount };
+  }
+
+  private async assertVoucherAudience(
+    queryRunner: QueryRunner,
+    voucher: LockedVoucher,
+    userId: string,
+    currentOrderId: string,
+    invalid: (message: string) => never,
+  ): Promise<void> {
+    if (voucher.audience === 'all') return;
+    if (voucher.audience === 'specific_customers') {
+      const rows = (await queryRunner.query(
+        `SELECT 1 FROM voucher_customers WHERE voucher_id = $1 AND user_id = $2`,
+        [voucher.id, userId],
+      )) as unknown[];
+      if (!rows.length) invalid('Voucher không dành cho tài khoản này!');
+      return;
+    }
+    if (voucher.audience === 'member_groups') {
+      const rows = (await queryRunner.query(
+        `SELECT 1 FROM voucher_customer_groups vcg INNER JOIN customer_group_members cgm ON cgm.group_id = vcg.group_id WHERE vcg.voucher_id = $1 AND cgm.user_id = $2 LIMIT 1`,
+        [voucher.id, userId],
+      )) as unknown[];
+      if (!rows.length)
+        invalid('Tài khoản không thuộc nhóm thành viên được áp dụng!');
+      return;
+    }
+    const [history] = (await queryRunner.query(
+      `SELECT COUNT(*) AS count FROM orders WHERE user_id = $1 AND id <> $2 AND deleted_at IS NULL AND status NOT IN ('cancelled','rejected')`,
+      [userId, currentOrderId],
+    )) as unknown as CountRow[];
+    const hasPreviousOrder = Number(history?.count ?? 0) > 0;
+    if (voucher.audience === 'new_customers' && hasPreviousOrder)
+      invalid('Voucher chỉ dành cho khách hàng mới!');
+    if (voucher.audience === 'existing_customers' && !hasPreviousOrder)
+      invalid('Voucher chỉ dành cho khách hàng cũ!');
+  }
+
   private async restockOrder(
     queryRunner: QueryRunner,
     orderId: string,
@@ -1053,6 +1457,10 @@ export class OrdersRepository {
       userId: row.user_id,
       status: row.status,
       totalAmount: Number(row.total_amount),
+      subtotalAmount: Number(row.subtotal_amount ?? row.total_amount),
+      discountAmount: Number(row.discount_amount ?? 0),
+      voucherId: row.voucher_id ?? null,
+      voucherCode: row.voucher_code ?? null,
       shippingAddress: row.shipping_address,
       recipientName: row.recipient_name,
       recipientPhone: row.recipient_phone,

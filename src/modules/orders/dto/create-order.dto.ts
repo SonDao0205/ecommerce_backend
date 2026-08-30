@@ -14,6 +14,14 @@ const trimString = ({ value }: TransformFnParams): unknown =>
   typeof value === 'string' ? value.trim() : value;
 
 export class CreateOrderFromCartDto {
+  @IsOptional()
+  @Transform(({ value }: TransformFnParams): unknown =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @MaxLength(50)
+  voucherCode?: string;
+
   @Transform(trimString)
   @IsString()
   @IsNotEmpty({ message: 'Tên người nhận không được để trống' })

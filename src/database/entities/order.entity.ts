@@ -85,6 +85,30 @@ export class Order extends BaseEntity {
   })
   totalAmount?: number;
 
+  @Column({
+    name: 'subtotal_amount',
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+  })
+  subtotalAmount?: number;
+
+  @Column({
+    name: 'discount_amount',
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+  })
+  discountAmount?: number;
+
+  @Column({ name: 'voucher_id', type: 'uuid', nullable: true })
+  voucherId?: string | null;
+
+  @Column({ name: 'voucher_code', type: 'varchar', length: 50, nullable: true })
+  voucherCode?: string | null;
+
   // Địa chỉ nhận hàng chi tiết
   @Column({ name: 'shipping_address', type: 'text' })
   shippingAddress?: string;

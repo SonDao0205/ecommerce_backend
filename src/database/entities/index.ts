@@ -14,3 +14,4 @@ export * from './order-item.entity';
 export * from './payment.entity';
 export * from './audit-log.entity';
 export * from './customer-address.entity';
+export * from './voucher.entity';

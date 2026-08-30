@@ -18,6 +18,7 @@ import { RedisCacheModule } from './common/cache/redis-cache.module';
 import { RateLimitGuard } from './common/rate-limit/rate-limit.guard';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { HealthModule } from './modules/health/health.module';
+import { VouchersModule } from './modules/vouchers/vouchers.module';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { HealthModule } from './modules/health/health.module';
     DashboardModule,
 
     HealthModule,
+    VouchersModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: RateLimitGuard }],

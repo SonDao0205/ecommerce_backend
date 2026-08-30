@@ -19,6 +19,7 @@ import {
 import { RedisCacheService } from '@common/cache/redis-cache.service';
 import { DASHBOARD_CACHE_VERSION_KEY } from '../dashboard/dashboard-cache.constants';
 import { ReturnEvidenceDto } from './dto/order-action.dto';
+import { VoucherPreviewDto } from './dto/voucher-preview.dto';
 
 @Injectable()
 export class OrdersService {
@@ -26,6 +27,14 @@ export class OrdersService {
     private readonly ordersRepository: OrdersRepository,
     private readonly cache: RedisCacheService,
   ) {}
+
+  async previewVoucher(userId: string, dto: VoucherPreviewDto) {
+    try {
+      return await this.ordersRepository.previewVoucher(userId, dto);
+    } catch (error) {
+      this.rethrowOrderError(error);
+    }
+  }
 
   getManagementOrders(
     query: OrderQueryDto,
@@ -220,11 +229,18 @@ export class OrdersService {
   ): Promise<OrderView> {
     const idempotency = this.idempotency(idempotencyKey, 'from-cart', dto);
     try {
-      const order = await this.ordersRepository.createFromCart(
-        userId,
-        this.recipient(dto),
-        idempotency,
-      );
+      const order = dto.voucherCode
+        ? await this.ordersRepository.createFromCart(
+            userId,
+            this.recipient(dto),
+            idempotency,
+            dto.voucherCode,
+          )
+        : await this.ordersRepository.createFromCart(
+            userId,
+            this.recipient(dto),
+            idempotency,
+          );
       await this.invalidateDashboard();
       return order;
     } catch (error) {
@@ -242,18 +258,27 @@ export class OrdersService {
     }
     const idempotency = this.idempotency(idempotencyKey, 'buy-now', dto);
     try {
-      const order = await this.ordersRepository.createBuyNow(
-        userId,
-        this.recipient(dto),
-        {
-          productId: dto.productId,
-          productSku: dto.productSku?.trim(),
-          variantId: dto.variantId,
-          variantSku: dto.variantSku?.trim(),
-          quantity: dto.quantity,
-        },
-        idempotency,
-      );
+      const item = {
+        productId: dto.productId,
+        productSku: dto.productSku?.trim(),
+        variantId: dto.variantId,
+        variantSku: dto.variantSku?.trim(),
+        quantity: dto.quantity,
+      };
+      const order = dto.voucherCode
+        ? await this.ordersRepository.createBuyNow(
+            userId,
+            this.recipient(dto),
+            item,
+            idempotency,
+            dto.voucherCode,
+          )
+        : await this.ordersRepository.createBuyNow(
+            userId,
+            this.recipient(dto),
+            item,
+            idempotency,
+          );
       await this.invalidateDashboard();
       return order;
     } catch (error) {
