@@ -77,10 +77,11 @@ export class CloudinaryService {
     );
   }
 
-  createUploadSignature(): CloudinaryUploadSignature {
+  createUploadSignature(
+    folder = 'ecommerce/products',
+  ): CloudinaryUploadSignature {
     this.ensureConfigured();
     const timestamp = Math.floor(Date.now() / 1000);
-    const folder = 'ecommerce/products';
     const apiSecret = this.configService.get<string>('CLOUDINARY_API_SECRET')!;
     return {
       timestamp,

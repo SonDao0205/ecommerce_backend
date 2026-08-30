@@ -12,8 +12,12 @@ describe('OrdersService', () => {
     createFromCart: jest.Mock;
     createBuyNow: jest.Mock;
     findStatus: jest.Mock;
+    findById: jest.Mock;
     updateStatus: jest.Mock;
     reject: jest.Mock;
+    cancelByCustomer: jest.Mock;
+    requestReturn: jest.Mock;
+    reviewReturn: jest.Mock;
   };
 
   const order = {
@@ -35,6 +39,7 @@ describe('OrdersService', () => {
       createFromCart: jest.fn().mockResolvedValue(order),
       createBuyNow: jest.fn().mockResolvedValue(order),
       findStatus: jest.fn().mockResolvedValue(OrderStatus.PENDING),
+      findById: jest.fn().mockResolvedValue(order),
       updateStatus: jest.fn().mockResolvedValue({
         ...order,
         status: OrderStatus.CONFIRMED,
@@ -44,6 +49,12 @@ describe('OrdersService', () => {
         status: OrderStatus.REJECTED,
         rejectionReason: 'Không thể xác minh người nhận',
       }),
+      cancelByCustomer: jest.fn().mockResolvedValue({
+        ...order,
+        status: OrderStatus.CANCELLED,
+      }),
+      requestReturn: jest.fn(),
+      reviewReturn: jest.fn(),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -135,6 +146,92 @@ describe('OrdersService', () => {
     expect(repository.reject).toHaveBeenCalledWith(
       order.id,
       'Không thể xác minh người nhận',
+      order.userId,
+    );
+  });
+
+  it('allows the customer to cancel a pending order', async () => {
+    await expect(
+      service.cancelMyOrder(order.userId, order.id, ' Không còn nhu cầu '),
+    ).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
+    expect(repository.cancelByCustomer).toHaveBeenCalledWith(
+      order.id,
+      order.userId,
+      'Không còn nhu cầu',
+    );
+  });
+
+  it('accepts a return request within seven days of confirmation', async () => {
+    const completed = {
+      ...order,
+      status: OrderStatus.COMPLETED,
+      confirmedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    };
+    const evidence = [
+      {
+        url: `https://res.cloudinary.com/demo/image/upload/v1/ecommerce/returns/${order.userId}/proof.jpg`,
+        publicId: `ecommerce/returns/${order.userId}/proof`,
+        resourceType: 'image' as const,
+      },
+    ];
+    repository.findById.mockResolvedValue(completed);
+    repository.requestReturn.mockResolvedValue({
+      ...completed,
+      status: OrderStatus.RETURN_REQUESTED,
+      returnEvidence: evidence,
+    });
+
+    await expect(
+      service.requestReturn(
+        order.userId,
+        order.id,
+        'Sản phẩm bị lỗi',
+        evidence,
+      ),
+    ).resolves.toMatchObject({ status: OrderStatus.RETURN_REQUESTED });
+    expect(repository.requestReturn).toHaveBeenCalledWith(
+      order.id,
+      order.userId,
+      'Sản phẩm bị lỗi',
+      evidence,
+    );
+  });
+
+  it('rejects a return request after the seven-day window', async () => {
+    repository.findById.mockResolvedValue({
+      ...order,
+      status: OrderStatus.COMPLETED,
+      confirmedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+    });
+
+    await expect(
+      service.requestReturn(order.userId, order.id, 'Sản phẩm bị lỗi'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repository.requestReturn).not.toHaveBeenCalled();
+  });
+
+  it('restocks through repository only when admin approves the return', async () => {
+    repository.findById.mockResolvedValue({
+      ...order,
+      status: OrderStatus.RETURN_REQUESTED,
+    });
+    repository.reviewReturn.mockResolvedValue({
+      ...order,
+      status: OrderStatus.RETURNED,
+    });
+
+    await expect(
+      service.reviewReturn(
+        order.id,
+        true,
+        'Đã xác minh sản phẩm lỗi',
+        order.userId,
+      ),
+    ).resolves.toMatchObject({ status: OrderStatus.RETURNED });
+    expect(repository.reviewReturn).toHaveBeenCalledWith(
+      order.id,
+      true,
+      'Đã xác minh sản phẩm lỗi',
       order.userId,
     );
   });

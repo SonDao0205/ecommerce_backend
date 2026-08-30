@@ -25,6 +25,11 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { OrderSummaryView, OrderView } from './orders.repository';
 import { OrdersService } from './orders.service';
 import { RateLimit } from '@common/rate-limit/rate-limit.decorator';
+import {
+  CancelMyOrderDto,
+  RequestOrderReturnDto,
+  ReviewOrderReturnDto,
+} from './dto/order-action.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('orders')
@@ -53,6 +58,51 @@ export class OrdersController {
       status: true,
       message: 'Lấy chi tiết đơn hàng thành công!',
       data: await this.ordersService.getMyOrder(req.user.id!, id),
+      code: 200,
+    };
+  }
+
+  @Roles(UserRoleEnum.CUSTOMER)
+  @Patch('my/:id/cancel')
+  async cancelMyOrder(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelMyOrderDto,
+  ): Promise<ApiResponseData<OrderView>> {
+    return {
+      status: true,
+      message: 'Hủy đơn hàng thành công và đã hoàn lại tồn kho!',
+      data: await this.ordersService.cancelMyOrder(
+        req.user.id!,
+        id,
+        dto.reason,
+      ),
+      code: 200,
+    };
+  }
+
+  @Roles(UserRoleEnum.CUSTOMER)
+  @Patch('my/:id/return-request')
+  @RateLimit({
+    limit: 5,
+    windowSeconds: 3600,
+    scope: 'identity',
+    keyPrefix: 'orders:return-request',
+  })
+  async requestReturn(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RequestOrderReturnDto,
+  ): Promise<ApiResponseData<OrderView>> {
+    return {
+      status: true,
+      message: 'Đã gửi yêu cầu hoàn trả hàng!',
+      data: await this.ordersService.requestReturn(
+        req.user.id!,
+        id,
+        dto.reason,
+        dto.evidence,
+      ),
       code: 200,
     };
   }
@@ -109,6 +159,28 @@ export class OrdersController {
       status: true,
       message: 'Từ chối đơn hàng thành công!',
       data: await this.ordersService.reject(id, dto.reason, req.user.id!),
+      code: 200,
+    };
+  }
+
+  @Roles(UserRoleEnum.ADMIN)
+  @Patch('management/:id/return-review')
+  async reviewReturn(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReviewOrderReturnDto,
+  ): Promise<ApiResponseData<OrderView>> {
+    return {
+      status: true,
+      message: dto.approved
+        ? 'Đã xác nhận hoàn trả và hoàn lại tồn kho!'
+        : 'Đã từ chối yêu cầu hoàn trả!',
+      data: await this.ordersService.reviewReturn(
+        id,
+        dto.approved,
+        dto.reason,
+        req.user.id!,
+      ),
       code: 200,
     };
   }

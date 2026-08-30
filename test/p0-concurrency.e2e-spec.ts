@@ -154,6 +154,160 @@ describe('P0 concurrency guards (PostgreSQL)', () => {
     ).toHaveLength(7);
     expect(quantity).toBe(5);
   });
+
+  it('restocks a customer-cancelled order exactly once under concurrent requests', async () => {
+    const { userId, productId, inventoryId, cartId } = await createFixture(
+      dataSource,
+      5,
+    );
+    cleanupIds.add(userId);
+    cleanupIds.add(productId);
+    cleanupIds.add(cartId);
+    cleanupIds.add(inventoryId);
+    await dataSource.query(
+      `INSERT INTO cart_items (id, cart_id, product_id, quantity)
+       VALUES ($1, $2, $3, 1)`,
+      [randomUUID(), cartId, productId],
+    );
+    const order = await ordersRepository.createFromCart(
+      userId,
+      {
+        recipientName: 'Concurrency Test',
+        recipientPhone: '0900000000',
+        shippingAddress: 'Test address',
+      },
+      { key: randomUUID(), fingerprint: 'b'.repeat(64) },
+    );
+
+    const results = await Promise.all([
+      ordersRepository.cancelByCustomer(order.id, userId, 'Khách hàng đổi ý'),
+      ordersRepository.cancelByCustomer(order.id, userId, 'Khách hàng đổi ý'),
+    ]);
+    const [inventory] = (await dataSource.query(
+      `SELECT stock FROM inventories WHERE product_id = $1`,
+      [productId],
+    )) as unknown as Array<{ stock: number }>;
+    const [savedOrder] = (await dataSource.query(
+      `SELECT status, stock_restored_at FROM orders WHERE id = $1`,
+      [order.id],
+    )) as unknown as Array<{
+      status: string;
+      stock_restored_at: Date | null;
+    }>;
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(inventory?.stock).toBe(5);
+    expect(savedOrder?.status).toBe('cancelled');
+    expect(savedOrder?.stock_restored_at).toBeTruthy();
+  });
+
+  it('does not restock when an admin rejects a return request', async () => {
+    const { userId, productId, inventoryId, cartId } = await createFixture(
+      dataSource,
+      5,
+    );
+    cleanupIds.add(userId);
+    cleanupIds.add(productId);
+    cleanupIds.add(cartId);
+    cleanupIds.add(inventoryId);
+    await dataSource.query(
+      `INSERT INTO cart_items (id, cart_id, product_id, quantity)
+       VALUES ($1, $2, $3, 1)`,
+      [randomUUID(), cartId, productId],
+    );
+    const order = await ordersRepository.createFromCart(
+      userId,
+      {
+        recipientName: 'Return Test',
+        recipientPhone: '0900000000',
+        shippingAddress: 'Test address',
+      },
+      { key: randomUUID(), fingerprint: 'c'.repeat(64) },
+    );
+    await dataSource.query(
+      `UPDATE orders SET status = 'completed', confirmed_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [order.id],
+    );
+    await ordersRepository.requestReturn(
+      order.id,
+      userId,
+      'Sản phẩm không đúng mô tả',
+      [],
+    );
+    const reviewed = await ordersRepository.reviewReturn(
+      order.id,
+      false,
+      'Sản phẩm vẫn đúng thông tin công bố',
+      userId,
+    );
+    const [inventory] = (await dataSource.query(
+      `SELECT stock FROM inventories WHERE product_id = $1`,
+      [productId],
+    )) as unknown as Array<{ stock: number }>;
+
+    expect(reviewed?.status).toBe('return_rejected');
+    expect(reviewed?.stockRestoredAt).toBeNull();
+    expect(inventory?.stock).toBe(4);
+  });
+
+  it('restocks an approved return exactly once under concurrent reviews', async () => {
+    const { userId, productId, inventoryId, cartId } = await createFixture(
+      dataSource,
+      5,
+    );
+    cleanupIds.add(userId);
+    cleanupIds.add(productId);
+    cleanupIds.add(cartId);
+    cleanupIds.add(inventoryId);
+    await dataSource.query(
+      `INSERT INTO cart_items (id, cart_id, product_id, quantity)
+       VALUES ($1, $2, $3, 1)`,
+      [randomUUID(), cartId, productId],
+    );
+    const order = await ordersRepository.createFromCart(
+      userId,
+      {
+        recipientName: 'Return Test',
+        recipientPhone: '0900000000',
+        shippingAddress: 'Test address',
+      },
+      { key: randomUUID(), fingerprint: 'd'.repeat(64) },
+    );
+    await dataSource.query(
+      `UPDATE orders SET status = 'completed', confirmed_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [order.id],
+    );
+    await ordersRepository.requestReturn(
+      order.id,
+      userId,
+      'Sản phẩm bị lỗi khi sử dụng',
+      [],
+    );
+    const reviews = await Promise.all([
+      ordersRepository.reviewReturn(
+        order.id,
+        true,
+        'Đã xác minh sản phẩm lỗi',
+        userId,
+      ),
+      ordersRepository.reviewReturn(
+        order.id,
+        true,
+        'Đã xác minh sản phẩm lỗi',
+        userId,
+      ),
+    ]);
+    const [inventory] = (await dataSource.query(
+      `SELECT stock FROM inventories WHERE product_id = $1`,
+      [productId],
+    )) as unknown as Array<{ stock: number }>;
+
+    expect(reviews.filter(Boolean)).toHaveLength(1);
+    expect(reviews.find(Boolean)?.status).toBe('returned');
+    expect(inventory?.stock).toBe(5);
+  });
 });
 
 async function createFixture(dataSource: DataSource, stock: number) {

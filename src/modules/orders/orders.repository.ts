@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, QueryRunner } from 'typeorm';
 import { setDatabaseAuditContext } from '@common/database/database-audit-context';
 import { extractPostgresRows } from '@common/database/postgres-query-result';
-import { OrderStatus } from '@entities';
+import { OrderReturnEvidence, OrderStatus } from '@entities';
 import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { OrderQueryDto } from './dto/order-query.dto';
 
@@ -72,6 +72,17 @@ export interface OrderView {
   note: string | null;
   rejectionReason: string | null;
   rejectedAt: Date | null;
+  confirmedAt: Date | null;
+  cancellationReason: string | null;
+  cancelledAt: Date | null;
+  cancelledBy: string | null;
+  returnReason: string | null;
+  returnEvidence: OrderReturnEvidence[];
+  returnRequestedAt: Date | null;
+  returnReviewReason: string | null;
+  returnReviewedAt: Date | null;
+  returnReviewedBy: string | null;
+  stockRestoredAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   customerName?: string | null;
@@ -134,6 +145,17 @@ interface RawOrder {
   note: string | null;
   rejection_reason: string | null;
   rejected_at: Date | null;
+  confirmed_at: Date | null;
+  cancellation_reason: string | null;
+  cancelled_at: Date | null;
+  cancelled_by: string | null;
+  return_reason: string | null;
+  return_evidence: OrderReturnEvidence[] | null;
+  return_requested_at: Date | null;
+  return_review_reason: string | null;
+  return_reviewed_at: Date | null;
+  return_reviewed_by: string | null;
+  stock_restored_at: Date | null;
   created_at: Date;
   updated_at: Date;
   customer_name?: string | null;
@@ -208,7 +230,12 @@ export class OrdersRepository {
     const rows = (await this.dataSource.query(
       `SELECT o.id, o.order_code, o.user_id, o.status, o.total_amount,
               o.shipping_address, o.recipient_name, o.recipient_phone, o.note,
-              o.rejection_reason, o.rejected_at, o.created_at, o.updated_at,
+              o.rejection_reason, o.rejected_at, o.confirmed_at,
+              o.cancellation_reason, o.cancelled_at, o.cancelled_by,
+              o.return_reason, o.return_evidence, o.return_requested_at,
+              o.return_review_reason, o.return_reviewed_at,
+              o.return_reviewed_by, o.stock_restored_at,
+              o.created_at, o.updated_at,
               u.full_name AS customer_name, u.email AS customer_email,
               u.phone AS customer_phone,
               (SELECT COUNT(*) FROM order_items oi
@@ -245,7 +272,12 @@ export class OrdersRepository {
     const rows = (await this.dataSource.query(
       `SELECT o.id, o.order_code, o.user_id, o.status, o.total_amount,
               o.shipping_address, o.recipient_name, o.recipient_phone, o.note,
-              o.rejection_reason, o.rejected_at, o.created_at, o.updated_at,
+              o.rejection_reason, o.rejected_at, o.confirmed_at,
+              o.cancellation_reason, o.cancelled_at, o.cancelled_by,
+              o.return_reason, o.return_evidence, o.return_requested_at,
+              o.return_review_reason, o.return_reviewed_at,
+              o.return_reviewed_by, o.stock_restored_at,
+              o.created_at, o.updated_at,
               u.full_name AS customer_name, u.email AS customer_email,
               u.phone AS customer_phone
        FROM orders o
@@ -291,7 +323,12 @@ export class OrdersRepository {
       await setDatabaseAuditContext(queryRunner, { actorId });
       const result: unknown = await queryRunner.query(
         `UPDATE orders
-       SET status = $3, updated_at = CURRENT_TIMESTAMP
+       SET status = $3,
+           confirmed_at = CASE
+             WHEN $3 = 'confirmed' THEN CURRENT_TIMESTAMP
+             ELSE confirmed_at
+           END,
+           updated_at = CURRENT_TIMESTAMP
        WHERE id = $1 AND status = $2 AND deleted_at IS NULL
        RETURNING id`,
         [id, expectedStatus, nextStatus],
@@ -321,8 +358,10 @@ export class OrdersRepository {
       const updateResult: unknown = await queryRunner.query(
         `UPDATE orders
          SET status = $2, rejection_reason = $3, rejected_at = CURRENT_TIMESTAMP,
+             stock_restored_at = CURRENT_TIMESTAMP,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1 AND status = $4 AND deleted_at IS NULL
+         WHERE id = $1 AND status = $4 AND stock_restored_at IS NULL
+           AND deleted_at IS NULL
          RETURNING order_code`,
         [id, OrderStatus.REJECTED, reason, OrderStatus.PENDING],
       );
@@ -334,68 +373,175 @@ export class OrdersRepository {
         await queryRunner.rollbackTransaction();
         return null;
       }
-      const items = (await queryRunner.query(
-        `SELECT product_id, variant_id, quantity
-         FROM order_items
-         WHERE order_id = $1 AND deleted_at IS NULL
-         ORDER BY product_id ASC, variant_id ASC NULLS FIRST
-         FOR UPDATE`,
-        [id],
-      )) as unknown as {
-        product_id: string | null;
-        variant_id: string | null;
-        quantity: number;
-      }[];
-      for (const item of items) {
-        if (!item.product_id) continue;
-        await queryRunner.query(
-          `SELECT id FROM products
-           WHERE id = $1 AND deleted_at IS NULL
-           LIMIT 1 FOR UPDATE`,
-          [item.product_id],
-        );
-        if (item.variant_id) {
-          await queryRunner.query(
-            `SELECT id FROM product_variants
-             WHERE id = $1 AND deleted_at IS NULL
-             LIMIT 1 FOR UPDATE`,
-            [item.variant_id],
-          );
-        }
-        const [inventory] = (await queryRunner.query(
-          `SELECT id, stock FROM inventories
-           WHERE product_id = $1 AND deleted_at IS NULL
-           LIMIT 1 FOR UPDATE`,
-          [item.product_id],
-        )) as unknown as { id: string; stock: number }[];
-        if (inventory) {
-          const nextStock = inventory.stock + item.quantity;
-          await setDatabaseAuditContext(queryRunner, {
-            actorId,
-            inventoryReason: `Từ chối đơn ${updated.order_code}: ${reason}`,
-            inventoryType: 'order_restock',
-          });
-          if (item.variant_id) {
-            await queryRunner.query(
-              `UPDATE product_variants
-               SET stock = stock + $2, updated_at = CURRENT_TIMESTAMP
-               WHERE id = $1`,
-              [item.variant_id, item.quantity],
-            );
-          }
-          await queryRunner.query(
-            `UPDATE inventories SET stock = $2, updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [inventory.id, nextStock],
-          );
-        }
-      }
+      await this.restockOrder(
+        queryRunner,
+        id,
+        actorId,
+        `Từ chối đơn ${updated.order_code}: ${reason}`,
+      );
       await queryRunner.commitTransaction();
       return this.findById(id);
     } catch (error) {
       if (queryRunner.isTransactionActive) {
         await queryRunner.rollbackTransaction();
       }
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async cancelByCustomer(
+    id: string,
+    userId: string,
+    reason: string,
+  ): Promise<OrderView | null> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await setDatabaseAuditContext(queryRunner, { actorId: userId });
+      const result: unknown = await queryRunner.query(
+        `UPDATE orders
+         SET status = $3, cancellation_reason = $4,
+             cancelled_at = CURRENT_TIMESTAMP, cancelled_by = $2,
+             stock_restored_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND user_id = $2
+           AND status IN ($5, $6)
+           AND stock_restored_at IS NULL AND deleted_at IS NULL
+         RETURNING order_code`,
+        [
+          id,
+          userId,
+          OrderStatus.CANCELLED,
+          reason,
+          OrderStatus.PENDING,
+          OrderStatus.CONFIRMED,
+        ],
+      );
+      const [updated] = extractPostgresRows<{ order_code: string }>(result);
+      if (!updated) {
+        await queryRunner.rollbackTransaction();
+        return null;
+      }
+      await this.restockOrder(
+        queryRunner,
+        id,
+        userId,
+        `Khách hàng hủy đơn ${updated.order_code}: ${reason}`,
+      );
+      await queryRunner.commitTransaction();
+      return this.findById(id, userId);
+    } catch (error) {
+      if (queryRunner.isTransactionActive)
+        await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async requestReturn(
+    id: string,
+    userId: string,
+    reason: string,
+    evidence: OrderReturnEvidence[],
+  ): Promise<OrderView | null> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await setDatabaseAuditContext(queryRunner, { actorId: userId });
+      const result: unknown = await queryRunner.query(
+        `UPDATE orders
+         SET status = $3, return_reason = $4, return_evidence = $5::jsonb,
+             return_requested_at = CURRENT_TIMESTAMP,
+             return_review_reason = NULL, return_reviewed_at = NULL,
+             return_reviewed_by = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND user_id = $2 AND status = $6
+           AND confirmed_at IS NOT NULL
+           AND CURRENT_TIMESTAMP <= confirmed_at + INTERVAL '7 days'
+           AND deleted_at IS NULL
+         RETURNING id`,
+        [
+          id,
+          userId,
+          OrderStatus.RETURN_REQUESTED,
+          reason,
+          JSON.stringify(evidence),
+          OrderStatus.COMPLETED,
+        ],
+      );
+      const [updated] = extractPostgresRows<{ id: string }>(result);
+      if (!updated) {
+        await queryRunner.rollbackTransaction();
+        return null;
+      }
+      await queryRunner.commitTransaction();
+      return this.findById(id, userId);
+    } catch (error) {
+      if (queryRunner.isTransactionActive)
+        await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async reviewReturn(
+    id: string,
+    approved: boolean,
+    reason: string,
+    actorId: string,
+  ): Promise<OrderView | null> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await setDatabaseAuditContext(queryRunner, { actorId });
+      const nextStatus = approved
+        ? OrderStatus.RETURNED
+        : OrderStatus.RETURN_REJECTED;
+      const result: unknown = await queryRunner.query(
+        `UPDATE orders
+         SET status = $2, return_review_reason = $3,
+             return_reviewed_at = CURRENT_TIMESTAMP, return_reviewed_by = $4,
+             stock_restored_at = CASE
+               WHEN $5::boolean THEN CURRENT_TIMESTAMP ELSE stock_restored_at
+             END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND status = $6
+           AND ($5::boolean = FALSE OR stock_restored_at IS NULL)
+           AND deleted_at IS NULL
+         RETURNING order_code`,
+        [
+          id,
+          nextStatus,
+          reason,
+          actorId,
+          approved,
+          OrderStatus.RETURN_REQUESTED,
+        ],
+      );
+      const [updated] = extractPostgresRows<{ order_code: string }>(result);
+      if (!updated) {
+        await queryRunner.rollbackTransaction();
+        return null;
+      }
+      if (approved) {
+        await this.restockOrder(
+          queryRunner,
+          id,
+          actorId,
+          `Hoàn trả đơn ${updated.order_code}: ${reason}`,
+        );
+      }
+      await queryRunner.commitTransaction();
+      return this.findById(id);
+    } catch (error) {
+      if (queryRunner.isTransactionActive)
+        await queryRunner.rollbackTransaction();
       throw error;
     } finally {
       await queryRunner.release();
@@ -540,6 +686,17 @@ export class OrdersRepository {
         note: order.note,
         rejectionReason: null,
         rejectedAt: null,
+        confirmedAt: null,
+        cancellationReason: null,
+        cancelledAt: null,
+        cancelledBy: null,
+        returnReason: null,
+        returnEvidence: [],
+        returnRequestedAt: null,
+        returnReviewReason: null,
+        returnReviewedAt: null,
+        returnReviewedBy: null,
+        stockRestoredAt: null,
         createdAt: order.created_at,
         updatedAt: order.updated_at,
         items,
@@ -809,6 +966,71 @@ export class OrdersRepository {
     return Number(row?.count ?? 0);
   }
 
+  private async restockOrder(
+    queryRunner: QueryRunner,
+    orderId: string,
+    actorId: string,
+    reason: string,
+  ): Promise<void> {
+    const items = (await queryRunner.query(
+      `SELECT product_id, variant_id, quantity
+       FROM order_items
+       WHERE order_id = $1 AND deleted_at IS NULL
+       ORDER BY product_id ASC, variant_id ASC NULLS FIRST
+       FOR UPDATE`,
+      [orderId],
+    )) as unknown as Array<{
+      product_id: string | null;
+      variant_id: string | null;
+      quantity: number;
+    }>;
+
+    await setDatabaseAuditContext(queryRunner, {
+      actorId,
+      inventoryReason: reason,
+      inventoryType: 'order_restock',
+    });
+    for (const item of items) {
+      if (!item.product_id) continue;
+      await queryRunner.query(
+        `SELECT id FROM products
+         WHERE id = $1 AND deleted_at IS NULL
+         LIMIT 1 FOR UPDATE`,
+        [item.product_id],
+      );
+      if (item.variant_id) {
+        await queryRunner.query(
+          `SELECT id FROM product_variants
+           WHERE id = $1 AND deleted_at IS NULL
+           LIMIT 1 FOR UPDATE`,
+          [item.variant_id],
+        );
+      }
+      const [inventory] = (await queryRunner.query(
+        `SELECT id, stock FROM inventories
+         WHERE product_id = $1 AND deleted_at IS NULL
+         LIMIT 1 FOR UPDATE`,
+        [item.product_id],
+      )) as unknown as Array<{ id: string; stock: number }>;
+      if (!inventory) continue;
+
+      if (item.variant_id) {
+        await queryRunner.query(
+          `UPDATE product_variants
+           SET stock = stock + $2, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [item.variant_id, item.quantity],
+        );
+      }
+      await queryRunner.query(
+        `UPDATE inventories
+         SET stock = stock + $2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [inventory.id, item.quantity],
+      );
+    }
+  }
+
   private mapOrderItem(row: RawOrderItem): OrderItemView {
     return {
       id: row.id,
@@ -837,6 +1059,17 @@ export class OrdersRepository {
       note: row.note,
       rejectionReason: row.rejection_reason,
       rejectedAt: row.rejected_at,
+      confirmedAt: row.confirmed_at,
+      cancellationReason: row.cancellation_reason,
+      cancelledAt: row.cancelled_at,
+      cancelledBy: row.cancelled_by,
+      returnReason: row.return_reason,
+      returnEvidence: row.return_evidence ?? [],
+      returnRequestedAt: row.return_requested_at,
+      returnReviewReason: row.return_review_reason,
+      returnReviewedAt: row.return_reviewed_at,
+      returnReviewedBy: row.return_reviewed_by,
+      stockRestoredAt: row.stock_restored_at,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       customerName: row.customer_name,

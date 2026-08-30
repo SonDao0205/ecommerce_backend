@@ -18,6 +18,15 @@ export enum OrderStatus {
   COMPLETED = 'completed',
   CANCELLED = 'cancelled',
   REJECTED = 'rejected',
+  RETURN_REQUESTED = 'return_requested',
+  RETURNED = 'returned',
+  RETURN_REJECTED = 'return_rejected',
+}
+
+export interface OrderReturnEvidence {
+  url: string;
+  publicId: string;
+  resourceType: 'image' | 'video';
 }
 
 /**
@@ -97,6 +106,39 @@ export class Order extends BaseEntity {
 
   @Column({ name: 'rejected_at', type: 'timestamptz', nullable: true })
   rejectedAt?: Date | null;
+
+  @Column({ name: 'confirmed_at', type: 'timestamptz', nullable: true })
+  confirmedAt?: Date | null;
+
+  @Column({ name: 'cancellation_reason', type: 'text', nullable: true })
+  cancellationReason?: string | null;
+
+  @Column({ name: 'cancelled_at', type: 'timestamptz', nullable: true })
+  cancelledAt?: Date | null;
+
+  @Column({ name: 'cancelled_by', type: 'uuid', nullable: true })
+  cancelledBy?: string | null;
+
+  @Column({ name: 'return_reason', type: 'text', nullable: true })
+  returnReason?: string | null;
+
+  @Column({ name: 'return_evidence', type: 'jsonb', default: () => "'[]'" })
+  returnEvidence?: OrderReturnEvidence[];
+
+  @Column({ name: 'return_requested_at', type: 'timestamptz', nullable: true })
+  returnRequestedAt?: Date | null;
+
+  @Column({ name: 'return_review_reason', type: 'text', nullable: true })
+  returnReviewReason?: string | null;
+
+  @Column({ name: 'return_reviewed_at', type: 'timestamptz', nullable: true })
+  returnReviewedAt?: Date | null;
+
+  @Column({ name: 'return_reviewed_by', type: 'uuid', nullable: true })
+  returnReviewedBy?: string | null;
+
+  @Column({ name: 'stock_restored_at', type: 'timestamptz', nullable: true })
+  stockRestoredAt?: Date | null;
 
   @OneToMany(() => OrderItem, (item) => item.order)
   items?: OrderItem[];

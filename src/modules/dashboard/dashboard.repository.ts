@@ -91,8 +91,12 @@ export class DashboardRepository {
     const [[orders], [sold], [customers]] = await Promise.all([
       this.dataSource.query<RawMetricOrder[]>(
         `SELECT
-           COALESCE(SUM(total_amount) FILTER (WHERE status = 'completed'), 0) AS revenue,
-           COUNT(*) FILTER (WHERE status = 'completed') AS completed_orders,
+           COALESCE(SUM(total_amount) FILTER (
+             WHERE status IN ('completed', 'return_requested', 'return_rejected')
+           ), 0) AS revenue,
+           COUNT(*) FILTER (
+             WHERE status IN ('completed', 'return_requested', 'return_rejected')
+           ) AS completed_orders,
            COUNT(*) AS total_orders,
            COUNT(*) FILTER (WHERE status IN ('cancelled', 'rejected')) AS cancelled_orders
          FROM orders
@@ -103,7 +107,7 @@ export class DashboardRepository {
         `SELECT COALESCE(SUM(item.quantity), 0) AS count
          FROM order_items item
          INNER JOIN orders order_row ON order_row.id = item.order_id
-         WHERE order_row.status = 'completed'
+         WHERE order_row.status IN ('completed', 'return_requested', 'return_rejected')
            AND order_row.created_at >= $1 AND order_row.created_at < $2
            AND order_row.deleted_at IS NULL AND item.deleted_at IS NULL`,
         [start, end],
@@ -162,10 +166,10 @@ export class DashboardRepository {
        )
        SELECT bucket.bucket,
               COALESCE(SUM(order_row.total_amount)
-                FILTER (WHERE order_row.status = 'completed'), 0) AS revenue,
+                FILTER (WHERE order_row.status IN ('completed', 'return_requested', 'return_rejected')), 0) AS revenue,
               COUNT(order_row.id) AS orders,
               COALESCE(SUM(order_row.sold_products)
-                FILTER (WHERE order_row.status = 'completed'), 0) AS sold_products
+                FILTER (WHERE order_row.status IN ('completed', 'return_requested', 'return_rejected')), 0) AS sold_products
        FROM buckets bucket
        LEFT JOIN order_totals order_row
          ON order_row.created_at >= bucket.bucket
@@ -201,9 +205,12 @@ export class DashboardRepository {
       confirmed: counts.get('confirmed') ?? 0,
       processing: counts.get('processing') ?? 0,
       shipping: counts.get('shipping') ?? 0,
-      completed: counts.get('completed') ?? 0,
+      completed:
+        (counts.get('completed') ?? 0) +
+        (counts.get('return_requested') ?? 0) +
+        (counts.get('return_rejected') ?? 0),
       cancelled: (counts.get('cancelled') ?? 0) + (counts.get('rejected') ?? 0),
-      returned: 0,
+      returned: counts.get('returned') ?? 0,
     };
   }
 
@@ -228,7 +235,7 @@ export class DashboardRepository {
               SUM(item.quantity) AS sold, SUM(item.subtotal) AS revenue
        FROM order_items item
        INNER JOIN orders order_row ON order_row.id = item.order_id
-       WHERE order_row.status = 'completed'
+       WHERE order_row.status IN ('completed', 'return_requested', 'return_rejected')
          AND order_row.created_at >= $1 AND order_row.created_at < $2
          AND order_row.deleted_at IS NULL AND item.deleted_at IS NULL
        GROUP BY item.product_id, item.product_name
@@ -315,7 +322,8 @@ export class DashboardRepository {
          SELECT user_id, MIN(created_at) AS first_order_at,
                 BOOL_OR(created_at >= $1 AND created_at < $2) AS active_in_period
          FROM orders
-         WHERE status = 'completed' AND deleted_at IS NULL
+         WHERE status IN ('completed', 'return_requested', 'return_rejected')
+           AND deleted_at IS NULL
          GROUP BY user_id
        )
        SELECT
@@ -352,7 +360,7 @@ export class DashboardRepository {
               SUM(order_row.total_amount) AS total_spent
        FROM orders order_row
        INNER JOIN users user_row ON user_row.id = order_row.user_id
-       WHERE order_row.status = 'completed'
+       WHERE order_row.status IN ('completed', 'return_requested', 'return_rejected')
          AND order_row.created_at >= $1 AND order_row.created_at < $2
          AND order_row.deleted_at IS NULL AND user_row.deleted_at IS NULL
        GROUP BY user_row.id
@@ -369,9 +377,12 @@ export class DashboardRepository {
     }));
   }
 
-  countPendingRefunds(): Promise<number> {
-    // Payment hiện chưa có trạng thái refund_requested; không suy diễn từ refunded.
-    return Promise.resolve(0);
+  async countPendingRefunds(): Promise<number> {
+    const [row] = await this.dataSource.query<RawCount[]>(
+      `SELECT COUNT(*) AS count FROM orders
+       WHERE status = 'return_requested' AND deleted_at IS NULL`,
+    );
+    return Number(row?.count ?? 0);
   }
 
   countUnansweredReviews(): Promise<number> {

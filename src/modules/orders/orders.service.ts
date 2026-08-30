@@ -18,6 +18,7 @@ import {
 } from './orders.repository';
 import { RedisCacheService } from '@common/cache/redis-cache.service';
 import { DASHBOARD_CACHE_VERSION_KEY } from '../dashboard/dashboard-cache.constants';
+import { ReturnEvidenceDto } from './dto/order-action.dto';
 
 @Injectable()
 export class OrdersService {
@@ -117,6 +118,101 @@ export class OrdersService {
     return order;
   }
 
+  async cancelMyOrder(
+    userId: string,
+    id: string,
+    reason: string,
+  ): Promise<OrderView> {
+    const current = await this.getMyOrder(userId, id);
+    if (
+      current.status !== OrderStatus.PENDING &&
+      current.status !== OrderStatus.CONFIRMED
+    ) {
+      throw new BadRequestException(
+        'Chỉ có thể hủy đơn đang chờ xác nhận hoặc đã xác nhận!',
+      );
+    }
+    const order = await this.ordersRepository.cancelByCustomer(
+      id,
+      userId,
+      reason.trim(),
+    );
+    if (!order) {
+      throw new ConflictException(
+        'Trạng thái đơn hàng vừa thay đổi. Vui lòng tải lại dữ liệu!',
+      );
+    }
+    await this.invalidateDashboard();
+    return order;
+  }
+
+  async requestReturn(
+    userId: string,
+    id: string,
+    reason: string,
+    evidence: ReturnEvidenceDto[] = [],
+  ): Promise<OrderView> {
+    const current = await this.getMyOrder(userId, id);
+    if (current.status !== OrderStatus.COMPLETED) {
+      throw new BadRequestException(
+        'Chỉ đơn hàng đã hoàn thành mới có thể yêu cầu hoàn trả!',
+      );
+    }
+    if (!current.confirmedAt) {
+      throw new BadRequestException(
+        'Đơn hàng không có thời điểm xác nhận để tính hạn hoàn trả!',
+      );
+    }
+    const returnDeadline =
+      new Date(current.confirmedAt).getTime() + 7 * 24 * 60 * 60 * 1000;
+    if (Date.now() > returnDeadline) {
+      throw new BadRequestException(
+        'Đã quá hạn hoàn trả 7 ngày kể từ khi đơn hàng được xác nhận!',
+      );
+    }
+    this.assertOwnedReturnEvidence(userId, evidence);
+    const order = await this.ordersRepository.requestReturn(
+      id,
+      userId,
+      reason.trim(),
+      evidence,
+    );
+    if (!order) {
+      throw new ConflictException(
+        'Đơn hàng không còn đủ điều kiện hoàn trả. Vui lòng tải lại dữ liệu!',
+      );
+    }
+    await this.invalidateDashboard();
+    return order;
+  }
+
+  async reviewReturn(
+    id: string,
+    approved: boolean,
+    reason: string,
+    actorId: string,
+  ): Promise<OrderView> {
+    const current = await this.getManagementOrder(id);
+    if (current.status !== OrderStatus.RETURN_REQUESTED) {
+      throw new BadRequestException(
+        'Đơn hàng không ở trạng thái chờ xử lý hoàn trả!',
+      );
+    }
+    const order = await this.ordersRepository.reviewReturn(
+      id,
+      approved,
+      reason.trim(),
+      actorId,
+    );
+    if (!order) {
+      throw new ConflictException(
+        'Yêu cầu hoàn trả vừa được xử lý. Vui lòng tải lại dữ liệu!',
+      );
+    }
+    await this.invalidateDashboard();
+    return order;
+  }
+
   async createFromCart(
     userId: string,
     dto: CreateOrderFromCartDto,
@@ -167,6 +263,32 @@ export class OrdersService {
 
   private async invalidateDashboard(): Promise<void> {
     await this.cache.increment(DASHBOARD_CACHE_VERSION_KEY);
+  }
+
+  private assertOwnedReturnEvidence(
+    userId: string,
+    evidence: ReturnEvidenceDto[],
+  ): void {
+    const publicIdPrefix = `ecommerce/returns/${userId}/`;
+    const urlFolder = `/ecommerce/returns/${userId}/`;
+    const invalid = evidence.some((asset) => {
+      try {
+        const url = new URL(asset.url);
+        return (
+          url.protocol !== 'https:' ||
+          url.hostname !== 'res.cloudinary.com' ||
+          !url.pathname.includes(urlFolder) ||
+          !asset.publicId.startsWith(publicIdPrefix)
+        );
+      } catch {
+        return true;
+      }
+    });
+    if (invalid) {
+      throw new BadRequestException(
+        'Media minh chứng không thuộc tài khoản hiện tại!',
+      );
+    }
   }
 
   private recipient(dto: CreateOrderFromCartDto) {

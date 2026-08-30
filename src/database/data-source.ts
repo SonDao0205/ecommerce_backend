@@ -10,6 +10,8 @@ export default new DataSource({
   database: process.env.DB_DATABASE ?? 'ecommerce_db',
   entities: [`${__dirname}/entities/*.entity{.ts,.js}`],
   migrations: [`${__dirname}/migrations/*{.ts,.js}`],
+  // Enum values must be committed before a following migration can use them.
+  migrationsTransactionMode: 'each',
   synchronize: false,
   extra: {
     max: Number(process.env.DB_POOL_MAX ?? 20),
