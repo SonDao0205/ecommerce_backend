@@ -77,4 +77,39 @@ export class CloudinaryController {
       code: 200,
     };
   }
+
+  @Roles(UserRoleEnum.CUSTOMER)
+  @Post('reviews/upload-signature')
+  getReviewUploadSignature(
+    @Req() req: AuthenticatedRequest,
+  ): ApiResponseData<CloudinaryUploadSignature> {
+    return {
+      status: true,
+      message: 'Tạo chữ ký tải media đánh giá thành công',
+      data: this.cloudinaryService.createUploadSignature(
+        `ecommerce/reviews/${req.user.id}`,
+      ),
+      code: 200,
+    };
+  }
+
+  @Roles(UserRoleEnum.CUSTOMER)
+  @Post('reviews/cleanup')
+  async cleanupReviewMedia(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: CleanupReturnEvidenceDto,
+  ): Promise<ApiResponseData<null>> {
+    const prefix = `ecommerce/reviews/${req.user.id}/`;
+    await this.cloudinaryService.removeImages(
+      dto.assets
+        .filter((asset) => asset.publicId.startsWith(prefix))
+        .map((asset) => ({ ...asset, url: '' })),
+    );
+    return {
+      status: true,
+      message: 'Dọn media đánh giá tạm thành công',
+      data: null,
+      code: 200,
+    };
+  }
 }

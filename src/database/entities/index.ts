@@ -15,3 +15,4 @@ export * from './payment.entity';
 export * from './audit-log.entity';
 export * from './customer-address.entity';
 export * from './voucher.entity';
+export * from './product-review.entity';

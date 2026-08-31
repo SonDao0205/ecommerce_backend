@@ -19,6 +19,7 @@ import { RateLimitGuard } from './common/rate-limit/rate-limit.guard';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { HealthModule } from './modules/health/health.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
 
 @Module({
   imports: [
@@ -41,13 +42,11 @@ import { VouchersModule } from './modules/vouchers/vouchers.module';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', ''),
         database: configService.get<string>('DB_DATABASE', 'ecommerce_db'),
-        autoLoadEntities: true, // Tự động load tất cả Entity được khai báo
-        // Migrations are the schema source of truth. synchronize can silently
-        // remove indexes/triggers that are not represented by entity metadata.
+        autoLoadEntities: true,
         synchronize:
           configService.get<string>('DB_SYNCHRONIZE', 'false') === 'true' &&
           configService.get<string>('NODE_ENV') !== 'production',
-        logging: configService.get<string>('DB_LOGGING') === 'true', // Log SQL queries (giống spring.jpa.show-sql)
+        logging: configService.get<string>('DB_LOGGING') === 'true',
         extra: {
           max: Number(configService.get<string>('DB_POOL_MAX', '20')),
           connectionTimeoutMillis: Number(
@@ -82,6 +81,7 @@ import { VouchersModule } from './modules/vouchers/vouchers.module';
 
     HealthModule,
     VouchersModule,
+    ReviewsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: RateLimitGuard }],

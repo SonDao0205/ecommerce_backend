@@ -63,6 +63,7 @@ export interface OrderItemView {
   unitPrice: number;
   quantity: number;
   subtotal: number;
+  reviewId: string | null;
 }
 
 export interface OrderView {
@@ -196,6 +197,7 @@ interface RawOrderItem {
   unit_price: number | string;
   quantity: number;
   subtotal: number | string;
+  review_id?: string | null;
 }
 
 interface CountRow {
@@ -375,7 +377,7 @@ export class OrdersRepository {
   ): Promise<void> {
     if (voucher.audience === 'all') return;
     if (voucher.audience === 'specific_customers') {
-      const rows = await this.dataSource.query(
+      const rows = await this.dataSource.query<Array<{ exists: number }>>(
         `SELECT 1 FROM voucher_customers WHERE voucher_id = $1 AND user_id = $2`,
         [voucher.id, userId],
       );
@@ -383,7 +385,7 @@ export class OrdersRepository {
       return;
     }
     if (voucher.audience === 'member_groups') {
-      const rows = await this.dataSource.query(
+      const rows = await this.dataSource.query<Array<{ exists: number }>>(
         `SELECT 1 FROM voucher_customer_groups vcg INNER JOIN customer_group_members cgm ON cgm.group_id = vcg.group_id WHERE vcg.voucher_id = $1 AND cgm.user_id = $2 LIMIT 1`,
         [voucher.id, userId],
       );
@@ -508,10 +510,11 @@ export class OrdersRepository {
     const order = rows[0];
     if (!order) return null;
     const items = (await this.dataSource.query(
-      `SELECT id, product_id, variant_id, product_name, variant_name,
-              variant_value, variant_sku, unit_price, quantity, subtotal
-       FROM order_items
-       WHERE order_id = $1 AND deleted_at IS NULL
+      `SELECT oi.id, oi.product_id, oi.variant_id, oi.product_name, oi.variant_name,
+              oi.variant_value, oi.variant_sku, oi.unit_price, oi.quantity, oi.subtotal,
+              (SELECT r.id FROM product_reviews r WHERE r.order_item_id = oi.id AND r.deleted_at IS NULL LIMIT 1) AS review_id
+       FROM order_items oi
+       WHERE oi.order_id = $1 AND oi.deleted_at IS NULL
        ORDER BY created_at ASC`,
       [id],
     )) as unknown as RawOrderItem[];
@@ -542,13 +545,15 @@ export class OrdersRepository {
       await setDatabaseAuditContext(queryRunner, { actorId });
       const result: unknown = await queryRunner.query(
         `UPDATE orders
-       SET status = $3,
+       SET status = $3::orders_status_enum,
            confirmed_at = CASE
-             WHEN $3 = 'confirmed' THEN CURRENT_TIMESTAMP
+             WHEN $3::orders_status_enum = 'confirmed'::orders_status_enum
+               THEN CURRENT_TIMESTAMP
              ELSE confirmed_at
            END,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND status = $2 AND deleted_at IS NULL
+       WHERE id = $1 AND status = $2::orders_status_enum
+         AND deleted_at IS NULL
        RETURNING id`,
         [id, expectedStatus, nextStatus],
       );
@@ -1447,6 +1452,7 @@ export class OrdersRepository {
       unitPrice: Number(row.unit_price),
       quantity: row.quantity,
       subtotal: Number(row.subtotal),
+      reviewId: row.review_id ?? null,
     };
   }
 
