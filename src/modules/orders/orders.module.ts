@@ -13,9 +13,13 @@ import {
 import { OrdersController } from './orders.controller';
 import { OrdersRepository } from './orders.repository';
 import { OrdersService } from './orders.service';
+import { PaymentsModule } from '../payments/payments.module';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
+    PaymentsModule,
+    EmailModule,
     TypeOrmModule.forFeature([
       Order,
       OrderItem,

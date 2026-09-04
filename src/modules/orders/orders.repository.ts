@@ -3,13 +3,20 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, QueryRunner } from 'typeorm';
 import { setDatabaseAuditContext } from '@common/database/database-audit-context';
 import { extractPostgresRows } from '@common/database/postgres-query-result';
-import { OrderReturnEvidence, OrderStatus } from '@entities';
+import {
+  OrderReturnEvidence,
+  OrderStatus,
+  PaymentMethod,
+  PaymentProvider,
+  PaymentStatus,
+} from '@entities';
 import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { OrderQueryDto } from './dto/order-query.dto';
 import {
   VoucherPreviewDto,
   VoucherPreviewMode,
 } from './dto/voucher-preview.dto';
+import type { PaymentView, SepayCheckout } from '../payments/payment.types';
 
 export type OrderCreationErrorCode =
   | 'CART_EMPTY'
@@ -20,6 +27,7 @@ export type OrderCreationErrorCode =
   | 'INVENTORY_MISSING'
   | 'STOCK_EXCEEDED'
   | 'VOUCHER_INVALID'
+  | 'PAYMENT_AMOUNT_INVALID'
   | 'IDEMPOTENCY_KEY_REUSED';
 
 export class OrderCreationError extends Error {
@@ -50,6 +58,11 @@ export interface BuyNowInput {
 export interface OrderIdempotencyInput {
   key: string;
   fingerprint: string;
+}
+
+export interface OrderPaymentInput {
+  method: PaymentMethod;
+  expiresAt: Date | null;
 }
 
 export interface OrderItemView {
@@ -98,6 +111,8 @@ export interface OrderView {
   customerName?: string | null;
   customerEmail?: string | null;
   customerPhone?: string | null;
+  payment: PaymentView | null;
+  checkout?: SepayCheckout | null;
   items: OrderItemView[];
 }
 
@@ -184,6 +199,23 @@ interface RawOrder {
   customer_email?: string | null;
   customer_phone?: string | null;
   item_count?: number | string;
+  payment_id?: string | null;
+  payment_amount?: number | string | null;
+  payment_status?: PaymentStatus | null;
+  payment_provider?: PaymentProvider | null;
+  payment_method?: PaymentMethod | null;
+  payment_invoice_number?: string | null;
+  payment_provider_order_id?: string | null;
+  payment_transaction_id?: string | null;
+  payment_currency?: string | null;
+  payment_attempt_number?: number | null;
+  payment_expires_at?: Date | null;
+  payment_paid_at?: Date | null;
+  payment_failed_at?: Date | null;
+  payment_cancelled_at?: Date | null;
+  payment_last_verified_at?: Date | null;
+  payment_created_at?: Date | null;
+  payment_updated_at?: Date | null;
 }
 
 interface RawOrderItem {
@@ -322,11 +354,7 @@ export class OrdersRepository {
         : Number(voucher.discount_value);
     if (voucher.max_discount_amount != null)
       discount = Math.min(discount, Number(voucher.max_discount_amount));
-    discount = Math.min(
-      Math.round(discount * 100) / 100,
-      eligibleAmount,
-      subtotal,
-    );
+    discount = Math.min(Math.round(discount), eligibleAmount, subtotal);
     return {
       code: voucher.code,
       subtotalAmount: subtotal,
@@ -458,10 +486,12 @@ export class OrdersRepository {
               o.created_at, o.updated_at,
               u.full_name AS customer_name, u.email AS customer_email,
               u.phone AS customer_phone,
+              ${this.paymentSelect},
               (SELECT COUNT(*) FROM order_items oi
                WHERE oi.order_id = o.id AND oi.deleted_at IS NULL) AS item_count
        FROM orders o
        LEFT JOIN users u ON u.id = o.user_id
+       ${this.paymentJoin}
        WHERE ${where}
        ORDER BY ${sortColumn} ${query.sortOrder}
        LIMIT ${limitParameter} OFFSET ${offsetParameter}`,
@@ -500,9 +530,10 @@ export class OrdersRepository {
               o.return_reviewed_by, o.stock_restored_at,
               o.created_at, o.updated_at,
               u.full_name AS customer_name, u.email AS customer_email,
-              u.phone AS customer_phone
+              u.phone AS customer_phone, ${this.paymentSelect}
        FROM orders o
        LEFT JOIN users u ON u.id = o.user_id
+       ${this.paymentJoin}
        WHERE o.id = $1 AND o.deleted_at IS NULL ${ownerCondition}
        LIMIT 1`,
       parameters,
@@ -558,6 +589,15 @@ export class OrdersRepository {
         [id, expectedStatus, nextStatus],
       );
       const rows = extractPostgresRows<{ id: string }>(result);
+      if (rows[0] && nextStatus === OrderStatus.COMPLETED) {
+        await queryRunner.query(
+          `UPDATE payments SET status = 'success', paid_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+           WHERE order_id = $1 AND provider = 'cod' AND status = 'pending'
+             AND deleted_at IS NULL`,
+          [id],
+        );
+      }
       await queryRunner.commitTransaction();
       return rows[0] ? this.findById(id) : null;
     } catch (error) {
@@ -603,6 +643,8 @@ export class OrdersRepository {
         actorId,
         `Từ chối đơn ${updated.order_code}: ${reason}`,
       );
+      await this.cancelPendingPayments(queryRunner, id);
+      await this.releaseVoucherRedemption(queryRunner, id);
       await queryRunner.commitTransaction();
       return this.findById(id);
     } catch (error) {
@@ -655,6 +697,8 @@ export class OrdersRepository {
         userId,
         `Khách hàng hủy đơn ${updated.order_code}: ${reason}`,
       );
+      await this.cancelPendingPayments(queryRunner, id);
+      await this.releaseVoucherRedemption(queryRunner, id);
       await queryRunner.commitTransaction();
       return this.findById(id, userId);
     } catch (error) {
@@ -776,6 +820,7 @@ export class OrdersRepository {
     userId: string,
     recipient: OrderRecipientInput,
     idempotency: OrderIdempotencyInput,
+    payment: OrderPaymentInput,
     voucherCode?: string,
   ): Promise<OrderView> {
     return this.createOrder(
@@ -804,6 +849,7 @@ export class OrdersRepository {
       },
       true,
       idempotency,
+      payment,
       voucherCode,
     );
   }
@@ -813,6 +859,7 @@ export class OrdersRepository {
     recipient: OrderRecipientInput,
     item: BuyNowInput,
     idempotency: OrderIdempotencyInput,
+    payment: OrderPaymentInput,
     voucherCode?: string,
   ): Promise<OrderView> {
     return this.createOrder(
@@ -821,6 +868,7 @@ export class OrdersRepository {
       () => Promise.resolve([item]),
       false,
       idempotency,
+      payment,
       voucherCode,
     );
   }
@@ -831,6 +879,7 @@ export class OrdersRepository {
     loadLines: (queryRunner: QueryRunner) => Promise<RequestedLine[]>,
     clearCart: boolean,
     idempotency: OrderIdempotencyInput,
+    payment: OrderPaymentInput,
     voucherCode?: string,
   ): Promise<OrderView> {
     const existing = await this.findByIdempotencyKey(userId, idempotency);
@@ -844,6 +893,7 @@ export class OrdersRepository {
           loadLines,
           clearCart,
           idempotency,
+          payment,
           voucherCode,
         );
       } catch (error) {
@@ -861,6 +911,7 @@ export class OrdersRepository {
     loadLines: (queryRunner: QueryRunner) => Promise<RequestedLine[]>,
     clearCart: boolean,
     idempotency: OrderIdempotencyInput,
+    paymentInput: OrderPaymentInput,
     voucherCode?: string,
   ): Promise<OrderView> {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -914,6 +965,13 @@ export class OrdersRepository {
           voucher?.voucherCode ?? null,
         ],
       );
+      const payment = await this.insertPayment(
+        queryRunner,
+        order,
+        payableAmount,
+        idempotency,
+        paymentInput,
+      );
       if (clearCart) {
         await queryRunner.query(
           `DELETE FROM cart_items
@@ -955,6 +1013,7 @@ export class OrdersRepository {
         stockRestoredAt: null,
         createdAt: order.created_at,
         updatedAt: order.updated_at,
+        payment,
         items,
       };
     } catch (error) {
@@ -1004,6 +1063,90 @@ export class OrdersRepository {
     const order = rows[0];
     if (!order) throw new Error('Không thể tạo đơn hàng');
     return order;
+  }
+
+  private async insertPayment(
+    queryRunner: QueryRunner,
+    order: RawOrder,
+    amount: number,
+    idempotency: OrderIdempotencyInput,
+    input: OrderPaymentInput,
+  ): Promise<PaymentView> {
+    const provider =
+      input.method === PaymentMethod.COD
+        ? PaymentProvider.COD
+        : PaymentProvider.SEPAY;
+    if (provider === PaymentProvider.SEPAY && !Number.isInteger(amount)) {
+      throw new OrderCreationError(
+        'PAYMENT_AMOUNT_INVALID',
+        'SePay chỉ hỗ trợ số tiền nguyên theo đơn vị VND!',
+      );
+    }
+    const status = amount === 0 ? PaymentStatus.SUCCESS : PaymentStatus.PENDING;
+    const [row] = (await queryRunner.query(
+      `INSERT INTO payments
+         (order_id, amount, status, provider, method, idempotency_key,
+          invoice_number, currency, attempt_number, expires_at, paid_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'VND', 1, $8,
+               CASE
+                 WHEN $3::payments_status_enum = 'success'::payments_status_enum
+                   THEN CURRENT_TIMESTAMP ELSE NULL
+               END)
+       RETURNING id, order_id, amount, status, provider, method,
+                 invoice_number, provider_order_id, transaction_id, currency,
+                 attempt_number, expires_at, paid_at, failed_at, cancelled_at,
+                 last_verified_at, created_at, updated_at`,
+      [
+        order.id,
+        amount,
+        status,
+        provider,
+        input.method,
+        `payment:${idempotency.key}`,
+        `PAY-${order.order_code}-1`,
+        status === PaymentStatus.PENDING ? input.expiresAt : null,
+      ],
+    )) as unknown as Array<{
+      id: string;
+      order_id: string;
+      amount: string | number;
+      status: PaymentStatus;
+      provider: PaymentProvider;
+      method: PaymentMethod;
+      invoice_number: string;
+      provider_order_id: string | null;
+      transaction_id: string | null;
+      currency: string;
+      attempt_number: number;
+      expires_at: Date | null;
+      paid_at: Date | null;
+      failed_at: Date | null;
+      cancelled_at: Date | null;
+      last_verified_at: Date | null;
+      created_at: Date;
+      updated_at: Date;
+    }>;
+    if (!row) throw new Error('Không thể tạo giao dịch thanh toán');
+    return {
+      id: row.id,
+      orderId: row.order_id,
+      amount: Number(row.amount),
+      status: row.status,
+      provider: row.provider,
+      method: row.method,
+      invoiceNumber: row.invoice_number,
+      providerOrderId: row.provider_order_id,
+      transactionId: row.transaction_id,
+      currency: row.currency,
+      attemptNumber: row.attempt_number,
+      expiresAt: row.expires_at,
+      paidAt: row.paid_at,
+      failedAt: row.failed_at,
+      cancelledAt: row.cancelled_at,
+      lastVerifiedAt: row.last_verified_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   private async reserveLine(
@@ -1312,7 +1455,7 @@ export class OrdersRepository {
         Number(voucher.max_discount_amount),
       );
     discountAmount = Math.min(
-      Math.round(discountAmount * 100) / 100,
+      Math.round(discountAmount),
       eligibleAmount,
       subtotal,
     );
@@ -1440,6 +1583,35 @@ export class OrdersRepository {
     }
   }
 
+  private async cancelPendingPayments(
+    queryRunner: QueryRunner,
+    orderId: string,
+  ): Promise<void> {
+    await queryRunner.query(
+      `UPDATE payments SET status = 'cancelled',
+         cancelled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE order_id = $1 AND status = 'pending' AND deleted_at IS NULL`,
+      [orderId],
+    );
+  }
+
+  private async releaseVoucherRedemption(
+    queryRunner: QueryRunner,
+    orderId: string,
+  ): Promise<void> {
+    const redemptions = (await queryRunner.query(
+      `DELETE FROM voucher_redemptions WHERE order_id = $1 RETURNING voucher_id`,
+      [orderId],
+    )) as unknown as Array<{ voucher_id: string }>;
+    for (const redemption of redemptions) {
+      await queryRunner.query(
+        `UPDATE vouchers SET used_count = GREATEST(used_count - 1, 0),
+           updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [redemption.voucher_id],
+      );
+    }
+  }
+
   private mapOrderItem(row: RawOrderItem): OrderItemView {
     return {
       id: row.id,
@@ -1489,7 +1661,53 @@ export class OrdersRepository {
       customerName: row.customer_name,
       customerEmail: row.customer_email,
       customerPhone: row.customer_phone,
+      payment: this.mapPayment(row),
       items,
+    };
+  }
+
+  private readonly paymentSelect = `pay.id AS payment_id,
+    pay.amount AS payment_amount, pay.status AS payment_status,
+    pay.provider AS payment_provider, pay.method AS payment_method,
+    pay.invoice_number AS payment_invoice_number,
+    pay.provider_order_id AS payment_provider_order_id,
+    pay.transaction_id AS payment_transaction_id,
+    pay.currency AS payment_currency,
+    pay.attempt_number AS payment_attempt_number,
+    pay.expires_at AS payment_expires_at, pay.paid_at AS payment_paid_at,
+    pay.failed_at AS payment_failed_at,
+    pay.cancelled_at AS payment_cancelled_at,
+    pay.last_verified_at AS payment_last_verified_at,
+    pay.created_at AS payment_created_at,
+    pay.updated_at AS payment_updated_at`;
+
+  private readonly paymentJoin = `LEFT JOIN LATERAL (
+    SELECT p.* FROM payments p WHERE p.order_id = o.id AND p.deleted_at IS NULL
+    ORDER BY p.attempt_number DESC, p.created_at DESC LIMIT 1
+  ) pay ON TRUE`;
+
+  private mapPayment(row: RawOrder): PaymentView | null {
+    if (!row.payment_id || !row.payment_status || !row.payment_provider)
+      return null;
+    return {
+      id: row.payment_id,
+      orderId: row.id,
+      amount: Number(row.payment_amount ?? 0),
+      status: row.payment_status,
+      provider: row.payment_provider,
+      method: row.payment_method ?? PaymentMethod.COD,
+      invoiceNumber: row.payment_invoice_number ?? '',
+      providerOrderId: row.payment_provider_order_id ?? null,
+      transactionId: row.payment_transaction_id ?? null,
+      currency: row.payment_currency ?? 'VND',
+      attemptNumber: row.payment_attempt_number ?? 1,
+      expiresAt: row.payment_expires_at ?? null,
+      paidAt: row.payment_paid_at ?? null,
+      failedAt: row.payment_failed_at ?? null,
+      cancelledAt: row.payment_cancelled_at ?? null,
+      lastVerifiedAt: row.payment_last_verified_at ?? null,
+      createdAt: row.payment_created_at ?? row.created_at,
+      updatedAt: row.payment_updated_at ?? row.updated_at,
     };
   }
 

@@ -2,11 +2,18 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { isUUID } from 'class-validator';
-import { OrderStatus } from '@entities';
+import {
+  OrderStatus,
+  PaymentMethod,
+  PaymentProvider,
+  PaymentStatus,
+} from '@entities';
 import { PaginatedData } from 'src/database/dtos/common/paginated_response.dto';
 import { BuyNowOrderDto, CreateOrderFromCartDto } from './dto/create-order.dto';
 import { OrderQueryDto } from './dto/order-query.dto';
@@ -20,12 +27,19 @@ import { RedisCacheService } from '@common/cache/redis-cache.service';
 import { DASHBOARD_CACHE_VERSION_KEY } from '../dashboard/dashboard-cache.constants';
 import { ReturnEvidenceDto } from './dto/order-action.dto';
 import { VoucherPreviewDto } from './dto/voucher-preview.dto';
+import { SepayService } from '../payments/sepay.service';
+import { OrderEmailService } from '../email/order-email.service';
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly ordersRepository: OrdersRepository,
     private readonly cache: RedisCacheService,
+    private readonly sepay: SepayService,
+    private readonly config: ConfigService,
+    private readonly orderEmail: OrderEmailService,
   ) {}
 
   async previewVoucher(userId: string, dto: VoucherPreviewDto) {
@@ -71,8 +85,8 @@ export class OrdersService {
         'Hãy sử dụng chức năng từ chối và nhập lý do từ chối!',
       );
     }
-    const currentStatus = await this.ordersRepository.findStatus(id);
-    if (!currentStatus) throw new NotFoundException('Không tìm thấy đơn hàng!');
+    const current = await this.getManagementOrder(id);
+    const currentStatus = current.status;
     const allowedNextStatus: Partial<Record<OrderStatus, OrderStatus>> = {
       [OrderStatus.PENDING]: OrderStatus.CONFIRMED,
       [OrderStatus.CONFIRMED]: OrderStatus.PROCESSING,
@@ -82,6 +96,14 @@ export class OrdersService {
     if (allowedNextStatus[currentStatus] !== nextStatus) {
       throw new BadRequestException(
         `Không thể chuyển trạng thái từ “${currentStatus}” sang “${nextStatus}”!`,
+      );
+    }
+    if (
+      current.payment?.provider === PaymentProvider.SEPAY &&
+      current.payment.status !== PaymentStatus.SUCCESS
+    ) {
+      throw new BadRequestException(
+        'Đơn hàng chưa được SePay xác nhận thanh toán!',
       );
     }
     const order = actorId
@@ -106,11 +128,19 @@ export class OrdersService {
     reason: string,
     actorId: string,
   ): Promise<OrderView> {
-    const currentStatus = await this.ordersRepository.findStatus(id);
-    if (!currentStatus) throw new NotFoundException('Không tìm thấy đơn hàng!');
+    const current = await this.getManagementOrder(id);
+    const currentStatus = current.status;
     if (currentStatus !== OrderStatus.PENDING) {
       throw new BadRequestException(
         'Chỉ có thể từ chối đơn hàng đang chờ xác nhận!',
+      );
+    }
+    if (
+      current.payment?.provider === PaymentProvider.SEPAY &&
+      current.payment.status === PaymentStatus.SUCCESS
+    ) {
+      throw new BadRequestException(
+        'Đơn đã thanh toán trực tuyến. Cần hoàn tiền trước khi từ chối!',
       );
     }
     const order = await this.ordersRepository.reject(
@@ -123,6 +153,9 @@ export class OrdersService {
         'Trạng thái đơn hàng vừa thay đổi. Vui lòng tải lại dữ liệu!',
       );
     }
+    this.sendEmailInBackground(order, () =>
+      this.orderEmail.sendOrderCancellation(order),
+    );
     await this.invalidateDashboard();
     return order;
   }
@@ -141,6 +174,14 @@ export class OrdersService {
         'Chỉ có thể hủy đơn đang chờ xác nhận hoặc đã xác nhận!',
       );
     }
+    if (
+      current.payment?.provider === PaymentProvider.SEPAY &&
+      current.payment.status === PaymentStatus.SUCCESS
+    ) {
+      throw new BadRequestException(
+        'Đơn đã thanh toán trực tuyến. Vui lòng liên hệ cửa hàng để hoàn tiền!',
+      );
+    }
     const order = await this.ordersRepository.cancelByCustomer(
       id,
       userId,
@@ -151,6 +192,9 @@ export class OrdersService {
         'Trạng thái đơn hàng vừa thay đổi. Vui lòng tải lại dữ liệu!',
       );
     }
+    this.sendEmailInBackground(order, () =>
+      this.orderEmail.sendOrderCancellation(order),
+    );
     await this.invalidateDashboard();
     return order;
   }
@@ -191,6 +235,9 @@ export class OrdersService {
         'Đơn hàng không còn đủ điều kiện hoàn trả. Vui lòng tải lại dữ liệu!',
       );
     }
+    this.sendEmailInBackground(order, () =>
+      this.orderEmail.sendOrderReturnUpdate(order),
+    );
     await this.invalidateDashboard();
     return order;
   }
@@ -218,6 +265,9 @@ export class OrdersService {
         'Yêu cầu hoàn trả vừa được xử lý. Vui lòng tải lại dữ liệu!',
       );
     }
+    this.sendEmailInBackground(order, () =>
+      this.orderEmail.sendOrderReturnUpdate(order),
+    );
     await this.invalidateDashboard();
     return order;
   }
@@ -228,21 +278,20 @@ export class OrdersService {
     idempotencyKey?: string,
   ): Promise<OrderView> {
     const idempotency = this.idempotency(idempotencyKey, 'from-cart', dto);
+    const payment = this.paymentInput(dto.paymentMethod);
     try {
-      const order = dto.voucherCode
-        ? await this.ordersRepository.createFromCart(
-            userId,
-            this.recipient(dto),
-            idempotency,
-            dto.voucherCode,
-          )
-        : await this.ordersRepository.createFromCart(
-            userId,
-            this.recipient(dto),
-            idempotency,
-          );
+      const order = await this.ordersRepository.createFromCart(
+        userId,
+        this.recipient(dto),
+        idempotency,
+        payment,
+        dto.voucherCode,
+      );
+      this.sendEmailInBackground(order, () =>
+        this.orderEmail.sendOrderConfirmation(order),
+      );
       await this.invalidateDashboard();
-      return order;
+      return this.withCheckout(order);
     } catch (error) {
       this.rethrowOrderError(error);
     }
@@ -257,6 +306,7 @@ export class OrdersService {
       throw new BadRequestException('Cần cung cấp productId hoặc productSku!');
     }
     const idempotency = this.idempotency(idempotencyKey, 'buy-now', dto);
+    const payment = this.paymentInput(dto.paymentMethod);
     try {
       const item = {
         productId: dto.productId,
@@ -265,22 +315,19 @@ export class OrdersService {
         variantSku: dto.variantSku?.trim(),
         quantity: dto.quantity,
       };
-      const order = dto.voucherCode
-        ? await this.ordersRepository.createBuyNow(
-            userId,
-            this.recipient(dto),
-            item,
-            idempotency,
-            dto.voucherCode,
-          )
-        : await this.ordersRepository.createBuyNow(
-            userId,
-            this.recipient(dto),
-            item,
-            idempotency,
-          );
+      const order = await this.ordersRepository.createBuyNow(
+        userId,
+        this.recipient(dto),
+        item,
+        idempotency,
+        payment,
+        dto.voucherCode,
+      );
+      this.sendEmailInBackground(order, () =>
+        this.orderEmail.sendOrderConfirmation(order),
+      );
       await this.invalidateDashboard();
-      return order;
+      return this.withCheckout(order);
     } catch (error) {
       this.rethrowOrderError(error);
     }
@@ -288,6 +335,49 @@ export class OrdersService {
 
   private async invalidateDashboard(): Promise<void> {
     await this.cache.increment(DASHBOARD_CACHE_VERSION_KEY);
+  }
+
+  private sendEmailInBackground(
+    order: OrderView,
+    send: () => Promise<void>,
+  ): void {
+    setImmediate(() => {
+      void send().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Không thể gửi email xác nhận đơn ${order.orderCode}: ${message}`,
+        );
+      });
+    });
+  }
+
+  private paymentInput(method: PaymentMethod) {
+    if (method !== PaymentMethod.COD) this.sepay.assertConfigured();
+    const ttlSeconds = Math.max(
+      Number(this.config.get<string>('SEPAY_PAYMENT_TTL_SECONDS', '900')),
+      60,
+    );
+    return {
+      method,
+      expiresAt:
+        method === PaymentMethod.COD
+          ? null
+          : new Date(Date.now() + ttlSeconds * 1000),
+    };
+  }
+
+  private withCheckout(order: OrderView): OrderView {
+    return {
+      ...order,
+      checkout:
+        order.payment?.status === PaymentStatus.PENDING
+          ? this.sepay.buildCheckout(
+              order.payment,
+              order.orderCode,
+              order.userId,
+            )
+          : null,
+    };
   }
 
   private assertOwnedReturnEvidence(

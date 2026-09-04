@@ -1,5 +1,6 @@
 import {
   IsInt,
+  IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -9,11 +10,16 @@ import {
   Min,
 } from 'class-validator';
 import { Transform, TransformFnParams } from 'class-transformer';
+import { PaymentMethod } from '@entities';
 
 const trimString = ({ value }: TransformFnParams): unknown =>
   typeof value === 'string' ? value.trim() : value;
 
 export class CreateOrderFromCartDto {
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod: PaymentMethod = PaymentMethod.COD;
+
   @IsOptional()
   @Transform(({ value }: TransformFnParams): unknown =>
     typeof value === 'string' ? value.trim().toUpperCase() : value,

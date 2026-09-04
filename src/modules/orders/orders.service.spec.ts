@@ -1,9 +1,17 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { OrderStatus } from '@entities';
+import {
+  OrderStatus,
+  PaymentMethod,
+  PaymentProvider,
+  PaymentStatus,
+} from '@entities';
 import { OrderCreationError, OrdersRepository } from './orders.repository';
 import { OrdersService } from './orders.service';
 import { RedisCacheService } from '@common/cache/redis-cache.service';
+import { SepayService } from '../payments/sepay.service';
+import { ConfigService } from '@nestjs/config';
+import { OrderEmailService } from '../email/order-email.service';
 
 describe('OrdersService', () => {
   const idempotencyKey = '30000000-0000-4000-8000-000000000001';
@@ -18,6 +26,11 @@ describe('OrdersService', () => {
     cancelByCustomer: jest.Mock;
     requestReturn: jest.Mock;
     reviewReturn: jest.Mock;
+  };
+  let orderEmail: {
+    sendOrderConfirmation: jest.Mock;
+    sendOrderCancellation: jest.Mock;
+    sendOrderReturnUpdate: jest.Mock;
   };
 
   const order = {
@@ -35,6 +48,11 @@ describe('OrdersService', () => {
   };
 
   beforeEach(async () => {
+    orderEmail = {
+      sendOrderConfirmation: jest.fn().mockResolvedValue(undefined),
+      sendOrderCancellation: jest.fn().mockResolvedValue(undefined),
+      sendOrderReturnUpdate: jest.fn().mockResolvedValue(undefined),
+    };
     repository = {
       createFromCart: jest.fn().mockResolvedValue(order),
       createBuyNow: jest.fn().mockResolvedValue(order),
@@ -64,6 +82,25 @@ describe('OrdersService', () => {
           provide: RedisCacheService,
           useValue: { increment: jest.fn().mockResolvedValue(1) },
         },
+        {
+          provide: SepayService,
+          useValue: {
+            assertConfigured: jest.fn(),
+            buildCheckout: jest.fn().mockReturnValue(null),
+          },
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn(
+              (_key: string, fallback?: unknown): unknown => fallback,
+            ),
+          },
+        },
+        {
+          provide: OrderEmailService,
+          useValue: orderEmail,
+        },
       ],
     }).compile();
     service = module.get(OrdersService);
@@ -72,12 +109,24 @@ describe('OrdersService', () => {
   it('creates an order from the authenticated user cart', async () => {
     await expect(
       service.createFromCart(order.userId, recipient(), idempotencyKey),
-    ).resolves.toEqual(order);
+    ).resolves.toMatchObject(order);
     expect(repository.createFromCart).toHaveBeenCalledWith(
       order.userId,
-      recipient(),
+      expect.objectContaining({ recipientName: 'Nguyễn Văn A' }),
       expect.objectContaining({ key: idempotencyKey }),
+      expect.objectContaining({ method: PaymentMethod.COD, expiresAt: null }),
+      undefined,
     );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(orderEmail.sendOrderConfirmation).toHaveBeenCalledWith(order);
+  });
+
+  it('does not wait for the confirmation email before returning the order', async () => {
+    orderEmail.sendOrderConfirmation.mockReturnValue(new Promise(() => {}));
+
+    await expect(
+      service.createFromCart(order.userId, recipient(), idempotencyKey),
+    ).resolves.toMatchObject(order);
   });
 
   it('requires a product reference for buy now', async () => {
@@ -100,7 +149,11 @@ describe('OrdersService', () => {
     await service.buyNow(order.userId, item, idempotencyKey);
     expect(repository.createBuyNow).toHaveBeenCalledWith(
       order.userId,
-      recipient(),
+      expect.objectContaining({
+        recipientName: 'Nguyễn Văn A',
+        recipientPhone: '0900000000',
+        shippingAddress: '1 Đường thử nghiệm',
+      }),
       {
         productId: undefined,
         productSku: 'PHONE-01',
@@ -109,6 +162,8 @@ describe('OrdersService', () => {
         quantity: 2,
       },
       expect.objectContaining({ key: idempotencyKey }),
+      expect.objectContaining({ method: PaymentMethod.COD, expiresAt: null }),
+      undefined,
     );
   });
 
@@ -139,26 +194,67 @@ describe('OrdersService', () => {
     expect(repository.updateStatus).not.toHaveBeenCalled();
   });
 
-  it('rejects a pending order with its reason and actor', async () => {
+  it('does not confirm a SePay order before payment succeeds', async () => {
+    repository.findById.mockResolvedValue({
+      ...order,
+      payment: {
+        provider: PaymentProvider.SEPAY,
+        status: PaymentStatus.PENDING,
+      },
+    });
+
     await expect(
-      service.reject(order.id, ' Không thể xác minh người nhận ', order.userId),
-    ).resolves.toMatchObject({ status: OrderStatus.REJECTED });
+      service.updateStatus(order.id, OrderStatus.CONFIRMED),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repository.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not progress an order after its SePay payment is refunded', async () => {
+    repository.findById.mockResolvedValue({
+      ...order,
+      status: OrderStatus.CONFIRMED,
+      payment: {
+        provider: PaymentProvider.SEPAY,
+        status: PaymentStatus.REFUNDED,
+      },
+    });
+
+    await expect(
+      service.updateStatus(order.id, OrderStatus.PROCESSING),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repository.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pending order with its reason and actor', async () => {
+    const rejected = await service.reject(
+      order.id,
+      ' Không thể xác minh người nhận ',
+      order.userId,
+    );
+    expect(rejected).toMatchObject({ status: OrderStatus.REJECTED });
     expect(repository.reject).toHaveBeenCalledWith(
       order.id,
       'Không thể xác minh người nhận',
       order.userId,
     );
+    await flushBackgroundEmail();
+    expect(orderEmail.sendOrderCancellation).toHaveBeenCalledWith(rejected);
   });
 
   it('allows the customer to cancel a pending order', async () => {
-    await expect(
-      service.cancelMyOrder(order.userId, order.id, ' Không còn nhu cầu '),
-    ).resolves.toMatchObject({ status: OrderStatus.CANCELLED });
+    const cancelled = await service.cancelMyOrder(
+      order.userId,
+      order.id,
+      ' Không còn nhu cầu ',
+    );
+    expect(cancelled).toMatchObject({ status: OrderStatus.CANCELLED });
     expect(repository.cancelByCustomer).toHaveBeenCalledWith(
       order.id,
       order.userId,
       'Không còn nhu cầu',
     );
+    await flushBackgroundEmail();
+    expect(orderEmail.sendOrderCancellation).toHaveBeenCalledWith(cancelled);
   });
 
   it('accepts a return request within seven days of confirmation', async () => {
@@ -181,19 +277,24 @@ describe('OrdersService', () => {
       returnEvidence: evidence,
     });
 
-    await expect(
-      service.requestReturn(
-        order.userId,
-        order.id,
-        'Sản phẩm bị lỗi',
-        evidence,
-      ),
-    ).resolves.toMatchObject({ status: OrderStatus.RETURN_REQUESTED });
+    const returnRequest = await service.requestReturn(
+      order.userId,
+      order.id,
+      'Sản phẩm bị lỗi',
+      evidence,
+    );
+    expect(returnRequest).toMatchObject({
+      status: OrderStatus.RETURN_REQUESTED,
+    });
     expect(repository.requestReturn).toHaveBeenCalledWith(
       order.id,
       order.userId,
       'Sản phẩm bị lỗi',
       evidence,
+    );
+    await flushBackgroundEmail();
+    expect(orderEmail.sendOrderReturnUpdate).toHaveBeenCalledWith(
+      returnRequest,
     );
   });
 
@@ -220,20 +321,21 @@ describe('OrdersService', () => {
       status: OrderStatus.RETURNED,
     });
 
-    await expect(
-      service.reviewReturn(
-        order.id,
-        true,
-        'Đã xác minh sản phẩm lỗi',
-        order.userId,
-      ),
-    ).resolves.toMatchObject({ status: OrderStatus.RETURNED });
+    const returned = await service.reviewReturn(
+      order.id,
+      true,
+      'Đã xác minh sản phẩm lỗi',
+      order.userId,
+    );
+    expect(returned).toMatchObject({ status: OrderStatus.RETURNED });
     expect(repository.reviewReturn).toHaveBeenCalledWith(
       order.id,
       true,
       'Đã xác minh sản phẩm lỗi',
       order.userId,
     );
+    await flushBackgroundEmail();
+    expect(orderEmail.sendOrderReturnUpdate).toHaveBeenCalledWith(returned);
   });
 });
 
@@ -242,5 +344,10 @@ function recipient() {
     recipientName: 'Nguyễn Văn A',
     recipientPhone: '0900000000',
     shippingAddress: '1 Đường thử nghiệm',
+    paymentMethod: PaymentMethod.COD,
   };
+}
+
+function flushBackgroundEmail(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }

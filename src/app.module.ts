@@ -20,6 +20,7 @@ import { RequestContextMiddleware } from './common/middleware/request-context.mi
 import { HealthModule } from './modules/health/health.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { ReviewsModule } from './modules/reviews/reviews.module';
+import { PaymentsModule } from './modules/payments/payments.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { ReviewsModule } from './modules/reviews/reviews.module';
     HealthModule,
     VouchersModule,
     ReviewsModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: RateLimitGuard }],
