@@ -4,23 +4,28 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ILike, Repository } from 'typeorm';
 import { UserResponse } from './dto/user.response.js';
 import { CreateUserDto } from './dto/create-user.dto.js';
+import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity.js';
 import { UserRole, UserStatus } from './entities/enums/user.enum.js';
-import * as bcrypt from 'bcrypt';
+import { CreateAddressDto } from './dto/create-address.dto.js';
+import { AddressResponse } from './dto/address.response.js';
+import { Address } from './entities/address.entity.js';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
+    @InjectRepository(Address)
+    private readonly addressRepository: Repository<Address>,
   ) {}
 
   findByEmail = async (email: string) => {
     return await this.userRepository.findOne({
       where: {
-        email: email.trim(),
+        email: ILike(email.trim()),
       },
     });
   };
@@ -71,6 +76,21 @@ export class UserService {
       }),
     );
     return this.convertToResponse(created);
+  };
+
+  createAddress = async (dto: CreateAddressDto, userId: string) => {
+    const existUser = await this.findById(userId);
+    if (!existUser) throw new NotFoundException('Người dùng không tồn tại!');
+
+    const value = {
+      ...dto,
+      user: existUser,
+    };
+    const created = await this.addressRepository.save(
+      this.addressRepository.create(value),
+    );
+
+    return new AddressResponse(created);
   };
 
   convertToResponse = (user: User): UserResponse => new UserResponse(user);

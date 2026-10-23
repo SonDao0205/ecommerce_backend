@@ -72,7 +72,7 @@ export class AuthController {
     const response = await this.authService.sendOtp(dto);
     return new ApiResponseData<{ expires_in_seconds: number }>(
       true,
-      'Đã gửi OTP, vui lòng kiểm tra email / số điện thoại!',
+      'Đã gửi OTP, vui lòng kiểm tra email!',
       response,
       HttpStatus.OK,
     );

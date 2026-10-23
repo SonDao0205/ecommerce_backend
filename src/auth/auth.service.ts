@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import * as bcrypt from 'bcrypt';
 import {
@@ -7,6 +7,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -24,6 +25,7 @@ import { LoginResponse } from './dto/auth.response.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 import { UserStatus } from '../user/entities/enums/user.enum.js';
 import { User } from '../user/entities/user.entity.js';
+import { MailService } from './mail.service.js';
 
 type OtpRecord = {
   otp: string;
@@ -41,6 +43,7 @@ export class AuthService {
 
   constructor(
     @Inject() private readonly userService: UserService,
+    private readonly mailService: MailService,
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>,
   ) {}
@@ -185,29 +188,43 @@ export class AuthService {
   };
 
   sendOtp = async (dto: SendOtpDto) => {
-    const input = dto.input.trim();
-    const exist = await this.findUserByInput(input);
+    const email = dto.input.trim();
+    if (!email.includes('@')) {
+      throw new BadRequestException('Hiện tại chỉ hỗ trợ gửi OTP qua email.');
+    }
+
+    const otpKey = email.toLowerCase();
+    const exist = await this.userService.findByEmail(email);
 
     if (!exist) {
-      throw new NotFoundException('Email / Số điện thoại không tồn tại!');
+      throw new NotFoundException('Email không tồn tại!');
     }
 
     const otp = this.generateOtp();
-    this.otpStore.set(input, {
+    this.otpStore.set(otpKey, {
       otp,
       userId: exist.id,
       expiresAt: Date.now() + OTP_TTL_MS,
       attempts: 0,
     });
 
-    // Tạm thời log OTP để test. Sau này thay bằng gửi email / SMS.
-    console.log(`OTP quên mật khẩu cho ${input}: ${otp}`);
+    try {
+      await this.mailService.sendPasswordResetOtp(email, otp);
+    } catch (error) {
+      console.log('error : ', error);
+
+      this.otpStore.delete(otpKey);
+      if (error instanceof ServiceUnavailableException) throw error;
+      throw new ServiceUnavailableException(
+        'Không thể gửi email OTP lúc này. Vui lòng thử lại sau.',
+      );
+    }
 
     return { expires_in_seconds: OTP_TTL_MS / 1000 };
   };
 
   verifyOtp = async (dto: VerifyOtpDto) => {
-    const input = dto.input.trim();
+    const input = dto.input.trim().toLowerCase();
     const otp = dto.otp.trim();
     const record = this.otpStore.get(input);
 
@@ -321,8 +338,7 @@ export class AuthService {
       : this.userService.findByPhone(normalized);
   };
 
-  private generateOtp = () =>
-    String(Math.floor(100000 + Math.random() * 900000));
+  private generateOtp = () => String(randomInt(0, 1_000_000)).padStart(6, '0');
 
   convertToLoginResponse = (
     user: User,

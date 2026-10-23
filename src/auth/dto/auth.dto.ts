@@ -61,17 +61,17 @@ export class RegisterDto {
 }
 
 export class SendOtpDto {
-  @IsString()
+  @IsEmail({}, { message: 'Hiện tại chỉ hỗ trợ gửi OTP qua email hợp lệ!' })
   @IsNotEmpty({
-    message: 'Email / Số điện thoại không được bỏ trống!',
+    message: 'Email không được bỏ trống!',
   })
   readonly input: string;
 }
 
 export class VerifyOtpDto {
-  @IsString()
+  @IsEmail({}, { message: 'Email không đúng định dạng!' })
   @IsNotEmpty({
-    message: 'Email / Số điện thoại không được bỏ trống!',
+    message: 'Email không được bỏ trống!',
   })
   readonly input: string;
 
