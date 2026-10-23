@@ -7,13 +7,13 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { User } from './user.entity.js';
+import type { Relation } from 'typeorm';
+import { User } from '../../user/entities/user.entity.js';
 
-@Entity({ name: 'refresh_tokens' })
+@Entity('refresh_tokens')
 export class RefreshToken {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
-
   @Column({
     name: `user_id`,
     type: `bigint`,
@@ -21,11 +21,9 @@ export class RefreshToken {
   })
   @Index()
   user_id: string;
-
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, (user) => user.refresh_tokens, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
-  user: User;
-
+  user: Relation<User>;
   @Column({
     name: `token_hash`,
     type: `varchar`,
@@ -34,14 +32,12 @@ export class RefreshToken {
     unique: true,
   })
   token_hash: string;
-
   @Column({
     name: `expires_at`,
     type: `timestamp`,
     nullable: false,
   })
   expires_at: Date;
-
   @Column({
     name: `revoked`,
     type: `smallint`,

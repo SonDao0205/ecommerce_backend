@@ -3,10 +3,13 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { UserRole, UserStatus } from './enums/user.enum.js';
+import { Address } from './address.entity.js';
+import { RefreshToken } from '../../auth/entities/refresh-token.entity.js';
 
 @Entity({ name: 'users' })
 export class User {
@@ -94,4 +97,10 @@ export class User {
     type: `timestamp`,
   })
   updated_at: Date;
+
+  @OneToMany(() => Address, (address) => address.user)
+  addresses: Address[];
+
+  @OneToMany(() => RefreshToken, (token) => token.user)
+  refresh_tokens: RefreshToken[];
 }

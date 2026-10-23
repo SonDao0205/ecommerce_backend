@@ -5,17 +5,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User } from '../entities/user.entity.js';
-import { UserRole, UserStatus } from '../entities/enums/user.enum.js';
 import { UserResponse } from './dto/user.response.js';
-
-type CreateUserInput = {
-  full_name: string;
-  email: string;
-  phone: string;
-  password_hash: string;
-  role?: string;
-};
+import { CreateUserDto } from './dto/create-user.dto.js';
+import { User } from './entities/user.entity.js';
+import { UserRole, UserStatus } from './entities/enums/user.enum.js';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class UserService {
@@ -54,8 +48,8 @@ export class UserService {
     return true;
   };
 
-  createUser = async (input: CreateUserInput) => {
-    const { email, phone } = input;
+  createUser = async (dto: CreateUserDto) => {
+    const { email, phone, full_name, role, password } = dto;
     if (email) {
       const existEmail = await this.findByEmail(email);
       if (existEmail) throw new BadRequestException('Email đã tồn tại!');
@@ -63,13 +57,14 @@ export class UserService {
     const existPhone = await this.findByPhone(phone);
     if (existPhone) throw new BadRequestException('Số điện thoại đã tồn tại!');
 
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
     const created = await this.userRepository.save(
       this.userRepository.create({
-        full_name: input.full_name.trim(),
+        full_name: full_name.trim(),
         email: email.trim(),
         phone: phone.trim(),
-        password_hash: input.password_hash,
-        role: input.role ?? UserRole.CLIENT,
+        password_hash: hashedPassword,
+        role: role ?? UserRole.CLIENT,
         status: UserStatus.ACTIVE,
         email_verified: 0,
         avatar_url: null,

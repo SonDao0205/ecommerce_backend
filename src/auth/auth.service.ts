@@ -12,9 +12,6 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserService } from '../user/user.service.js';
-import { User } from '../entities/user.entity.js';
-import { RefreshToken } from '../entities/refresh-token.entity.js';
-import { UserStatus } from '../entities/enums/user.enum.js';
 import {
   ChangePasswordDto,
   ForgotPasswordDto,
@@ -24,6 +21,9 @@ import {
   VerifyOtpDto,
 } from './dto/auth.dto.js';
 import { LoginResponse } from './dto/auth.response.js';
+import { RefreshToken } from './entities/refresh-token.entity.js';
+import { UserStatus } from '../user/entities/enums/user.enum.js';
+import { User } from '../user/entities/user.entity.js';
 
 type OtpRecord = {
   otp: string;
@@ -46,14 +46,12 @@ export class AuthService {
   ) {}
 
   register = async (dto: RegisterDto) => {
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
-
     return this.userService.createUser({
       full_name: dto.full_name,
       email: dto.email,
       phone: dto.phone,
       role: dto.role,
-      password_hash: hashedPassword,
+      password: dto.password,
     });
   };
 

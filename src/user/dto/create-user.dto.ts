@@ -6,7 +6,7 @@ import {
   IsString,
   Matches,
 } from 'class-validator';
-import { UserRole } from '../../entities/enums/user.enum.js';
+import { UserRole } from '../entities/enums/user.enum.js';
 
 export class CreateUserDto {
   @IsString({
