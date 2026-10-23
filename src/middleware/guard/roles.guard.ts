@@ -51,8 +51,6 @@ export class RolesGuard implements CanActivate {
       ],
     );
 
-    console.log('require role : ', requiredRoles);
-
     // Nếu route không yêu cầu role cụ thể nào → cho phép tất cả truy cập
     if (!requiredRoles || requiredRoles.length === 0) {
       return true;

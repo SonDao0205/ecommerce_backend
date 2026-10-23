@@ -9,11 +9,29 @@ import {
 } from '@nestjs/common';
 import { UserService } from '../user/user.service.js';
 import { User } from '../entities/user.entity.js';
-import { LoginDto, RegisterDto } from './dto/auth.dto.js';
+import {
+  ForgotPasswordDto,
+  LoginDto,
+  RegisterDto,
+  SendOtpDto,
+  VerifyOtpDto,
+} from './dto/auth.dto.js';
 import { LoginResponse } from './dto/auth.response.js';
+
+type OtpRecord = {
+  otp: string;
+  userId: string;
+  expiresAt: number;
+  attempts: number;
+};
+
+const OTP_TTL_MS = 5 * 60 * 1000;
+const OTP_MAX_ATTEMPTS = 5;
 
 @Injectable()
 export class AuthService {
+  private readonly otpStore = new Map<string, OtpRecord>();
+
   constructor(@Inject() private readonly userService: UserService) {}
 
   register = async (dto: RegisterDto) => {
@@ -32,9 +50,7 @@ export class AuthService {
     const { input, password } = dto;
 
     // Tìm user theo email hoặc số điện thoại
-    const exist = input.trim().endsWith(`@gmail.com`)
-      ? await this.userService.findByEmail(input)
-      : await this.userService.findByPhone(input);
+    const exist = await this.findUserByInput(input);
     if (!exist)
       throw new NotFoundException(
         'Email / Số điện thoại hoặc mật khẩu không đúng!',
@@ -140,6 +156,110 @@ export class AuthService {
     // Trả về response đã được loại bỏ các trường nhạy cảm (password…)
     return this.userService.convertToResponse(user);
   };
+
+  sendOtp = async (dto: SendOtpDto) => {
+    const input = dto.input.trim();
+    const exist = await this.findUserByInput(input);
+
+    if (!exist) {
+      throw new NotFoundException('Email / Số điện thoại không tồn tại!');
+    }
+
+    const otp = this.generateOtp();
+    this.otpStore.set(input, {
+      otp,
+      userId: exist.id,
+      expiresAt: Date.now() + OTP_TTL_MS,
+      attempts: 0,
+    });
+
+    // Tạm thời log OTP để test. Sau này thay bằng gửi email / SMS.
+    console.log(`OTP quên mật khẩu cho ${input}: ${otp}`);
+
+    return { expires_in_seconds: OTP_TTL_MS / 1000 };
+  };
+
+  verifyOtp = async (dto: VerifyOtpDto) => {
+    const input = dto.input.trim();
+    const otp = dto.otp.trim();
+    const record = this.otpStore.get(input);
+
+    if (!record || Date.now() > record.expiresAt) {
+      this.otpStore.delete(input);
+      throw new BadRequestException('OTP không hợp lệ hoặc đã hết hạn!');
+    }
+
+    if (record.otp !== otp) {
+      record.attempts += 1;
+      if (record.attempts >= OTP_MAX_ATTEMPTS) {
+        this.otpStore.delete(input);
+        throw new BadRequestException(
+          'OTP đã nhập sai quá số lần cho phép, vui lòng gửi lại OTP!',
+        );
+      }
+      this.otpStore.set(input, record);
+      throw new BadRequestException('OTP không chính xác!');
+    }
+
+    const user = await this.userService.findById(record.userId);
+    if (!user) {
+      this.otpStore.delete(input);
+      throw new NotFoundException('Người dùng không tồn tại!');
+    }
+
+    // OTP dùng 1 lần: xoá sau khi xác thực thành công
+    this.otpStore.delete(input);
+
+    return { reset_token: this.createResetPasswordToken(user) };
+  };
+
+  forgotPassword = async (dto: ForgotPasswordDto, userId: string) => {
+    const { newPassword, confirmPassword } = dto;
+
+    if (newPassword !== confirmPassword) {
+      throw new BadRequestException('Xác nhận mật khẩu không khớp!');
+    }
+
+    const user = await this.userService.findById(userId);
+    if (!user) throw new UnauthorizedException('Người dùng không tồn tại!');
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await this.userService.updatePassword(user.id, hashedPassword);
+
+    return true;
+  };
+
+  createResetPasswordToken = (user: User) => {
+    const secret = process.env.RESET_PASSWORD_TOKEN_SECRET;
+    const exp = process.env.RESET_PASSWORD_TOKEN_EXP;
+    if (!secret || !exp) {
+      throw new BadRequestException(
+        'Cần cung cấp RESET_PASSWORD_TOKEN_SECRET và RESET_PASSWORD_TOKEN_EXP!',
+      );
+    }
+
+    return jwt.sign(
+      {
+        id: user.id,
+        purpose: 'reset_password',
+      },
+      String(secret),
+      {
+        algorithm: `HS256`,
+        expiresIn: exp as SignOptions[`expiresIn`],
+      },
+    );
+  };
+
+  private findUserByInput = async (input: string) => {
+    const normalized = input.trim();
+    return normalized.includes('@')
+      ? this.userService.findByEmail(normalized)
+      : this.userService.findByPhone(normalized);
+  };
+
+  private generateOtp = () =>
+    String(Math.floor(100000 + Math.random() * 900000));
 
   convertToLoginResponse = (
     user: User,

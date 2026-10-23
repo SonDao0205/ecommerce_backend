@@ -1,8 +1,12 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto.js';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../entities/user.entity.js';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { UserResponse } from './dto/user.response.js';
 
 @Injectable()
@@ -29,6 +33,17 @@ export class UserService {
 
   findById = async (id: string) => {
     return await this.userRepository.findOne({ where: { id } });
+  };
+
+  updatePassword = async (userId: string, hashedPassword: string) => {
+    const user = await this.findById(userId);
+    if (!user) throw new NotFoundException('Người dùng không tồn tại!');
+
+    await this.userRepository.update(
+      { id: userId },
+      { password: hashedPassword },
+    );
+    return true;
   };
 
   createUser = async (dto: CreateUserDto) => {

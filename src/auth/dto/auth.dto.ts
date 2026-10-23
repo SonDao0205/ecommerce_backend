@@ -58,3 +58,42 @@ export class RegisterDto {
   @IsNotEmpty()
   readonly password: string;
 }
+
+export class SendOtpDto {
+  @IsString()
+  @IsNotEmpty({
+    message: 'Email / Số điện thoại không được bỏ trống!',
+  })
+  readonly input: string;
+}
+
+export class VerifyOtpDto {
+  @IsString()
+  @IsNotEmpty({
+    message: 'Email / Số điện thoại không được bỏ trống!',
+  })
+  readonly input: string;
+
+  @IsString()
+  @IsNotEmpty({
+    message: 'OTP không được bỏ trống!',
+  })
+  @Matches(/^\d{6}$/, {
+    message: 'OTP phải gồm 6 chữ số!',
+  })
+  readonly otp: string;
+}
+
+export class ForgotPasswordDto {
+  @IsString()
+  @IsNotEmpty({
+    message: 'Mật khẩu không được bỏ trống!',
+  })
+  readonly newPassword: string;
+
+  @IsString()
+  @IsNotEmpty({
+    message: 'Xác nhận mật khẩu không được bỏ trống!',
+  })
+  readonly confirmPassword: string;
+}

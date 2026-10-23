@@ -29,7 +29,6 @@ export class AuthGuard implements CanActivate {
     // NestJS hỗ trợ nhiều loại context (HTTP, WebSocket, gRPC…).
     // switchToHttp() giúp ta lấy đúng đối tượng HTTP request.
     const request = context.switchToHttp().getRequest<Request>();
-    console.log('request : ', request);
 
     // ── Giai đoạn 2: Trích xuất token từ header Authorization ───────────────
     // Client cần gửi header dạng: Authorization: Bearer <token>
