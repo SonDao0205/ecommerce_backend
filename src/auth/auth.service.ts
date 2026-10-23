@@ -1,15 +1,22 @@
+import { createHash } from 'node:crypto';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import * as bcrypt from 'bcrypt';
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { UserService } from '../user/user.service.js';
 import { User } from '../entities/user.entity.js';
+import { RefreshToken } from '../entities/refresh-token.entity.js';
+import { UserStatus } from '../entities/enums/user.enum.js';
 import {
+  ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
   RegisterDto,
@@ -32,39 +39,49 @@ const OTP_MAX_ATTEMPTS = 5;
 export class AuthService {
   private readonly otpStore = new Map<string, OtpRecord>();
 
-  constructor(@Inject() private readonly userService: UserService) {}
+  constructor(
+    @Inject() private readonly userService: UserService,
+    @InjectRepository(RefreshToken)
+    private readonly refreshTokenRepository: Repository<RefreshToken>,
+  ) {}
 
   register = async (dto: RegisterDto) => {
-    // Hash mật khẩu trước khi lưu vào DB, saltRounds = 10
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    // Ghi đè password bằng password đã được hash
-    const created = await this.userService.createUser({
-      ...dto,
-      password: hashedPassword,
+    return this.userService.createUser({
+      full_name: dto.full_name,
+      email: dto.email,
+      phone: dto.phone,
+      role: dto.role,
+      password_hash: hashedPassword,
     });
-    return created;
   };
 
   login = async (dto: LoginDto) => {
     const { input, password } = dto;
 
-    // Tìm user theo email hoặc số điện thoại
     const exist = await this.findUserByInput(input);
-    if (!exist)
+    if (!exist) {
       throw new NotFoundException(
         'Email / Số điện thoại hoặc mật khẩu không đúng!',
       );
+    }
 
-    // So sánh password được gửi lên với password đã hash trong DB
-    const isMatch = await bcrypt.compare(password.trim(), exist.password);
-    if (!isMatch)
+    const isMatch = await bcrypt.compare(password.trim(), exist.password_hash);
+    if (!isMatch) {
       throw new NotFoundException(
         'Email / Số điện thoại hoặc mật khẩu không đúng!',
       );
+    }
+
+    if (exist.status === UserStatus.LOCKED) {
+      throw new ForbiddenException('Tài khoản đã bị khóa!');
+    }
 
     const access_token = this.createAccessToken(exist);
     const refresh_token = this.createRefreshToken(exist);
+    await this.saveRefreshToken(exist, refresh_token);
+
     return this.convertToLoginResponse(exist, access_token, refresh_token);
   };
 
@@ -76,13 +93,12 @@ export class AuthService {
     const token = jwt.sign(
       {
         id: user.id,
-        name: user.name,
+        full_name: user.full_name,
         email: user.email,
         phone: user.phone,
         role: user.role,
         status: user.status,
-        created_at: user.created_at,
-        updated_at: user.updated_at,
+        email_verified: user.email_verified,
       },
       String(secret),
       {
@@ -102,13 +118,6 @@ export class AuthService {
     const token = jwt.sign(
       {
         id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        status: user.status,
-        created_at: user.created_at,
-        updated_at: user.updated_at,
       },
       String(secret),
       {
@@ -125,7 +134,6 @@ export class AuthService {
     if (!secret)
       throw new BadRequestException('Cần cung cấp REFRESH_TOKEN_SECRET!');
 
-    // Verify refresh token — nếu hết hạn hoặc sai chữ ký sẽ throw
     let payload: jwt.JwtPayload;
     try {
       payload = jwt.verify(token, secret, {
@@ -137,23 +145,44 @@ export class AuthService {
       );
     }
 
-    // Kiểm tra user vẫn còn tồn tại trong DB
-    // (tránh cấp token mới cho tài khoản đã bị xoá / bị ban)
+    const stored = await this.refreshTokenRepository.findOne({
+      where: {
+        token_hash: this.hashRefreshToken(token),
+        revoked: 0,
+      },
+    });
+
+    if (!stored || stored.expires_at.getTime() <= Date.now()) {
+      throw new UnauthorizedException(
+        'Refresh Token không hợp lệ hoặc đã hết hạn!',
+      );
+    }
+
+    if (String(stored.user_id) !== String(payload.id)) {
+      throw new UnauthorizedException(
+        'Refresh Token không hợp lệ hoặc đã hết hạn!',
+      );
+    }
+
     const user = await this.userService.findById(payload.id as string);
     if (!user) throw new UnauthorizedException('Người dùng không tồn tại!');
+    if (user.status === UserStatus.LOCKED) {
+      throw new ForbiddenException('Tài khoản đã bị khóa!');
+    }
 
-    // Cấp cặp token mới (access + refresh) — rotation pattern
+    stored.revoked = 1;
+    await this.refreshTokenRepository.save(stored);
+
     const new_access_token = this.createAccessToken(user);
     const new_refresh_token = this.createRefreshToken(user);
+    await this.saveRefreshToken(user, new_refresh_token);
 
     return { access_token: new_access_token, refresh_token: new_refresh_token };
   };
 
   getMe = async (userId: string) => {
-    // Tìm user trong DB bằng id lấy từ JWT payload
     const user = await this.userService.findById(userId);
     if (!user) throw new NotFoundException('Người dùng không tồn tại!');
-    // Trả về response đã được loại bỏ các trường nhạy cảm (password…)
     return this.userService.convertToResponse(user);
   };
 
@@ -207,25 +236,18 @@ export class AuthService {
       throw new NotFoundException('Người dùng không tồn tại!');
     }
 
-    // OTP dùng 1 lần: xoá sau khi xác thực thành công
     this.otpStore.delete(input);
 
     return { reset_token: this.createResetPasswordToken(user) };
   };
 
   forgotPassword = async (dto: ForgotPasswordDto, userId: string) => {
-    const { newPassword, confirmPassword } = dto;
+    await this.setNewPassword(userId, dto.newPassword, dto.confirmPassword);
+    return true;
+  };
 
-    if (newPassword !== confirmPassword) {
-      throw new BadRequestException('Xác nhận mật khẩu không khớp!');
-    }
-
-    const user = await this.userService.findById(userId);
-    if (!user) throw new UnauthorizedException('Người dùng không tồn tại!');
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await this.userService.updatePassword(user.id, hashedPassword);
-
+  changePassword = async (dto: ChangePasswordDto, userId: string) => {
+    await this.setNewPassword(userId, dto.newPassword, dto.confirmPassword);
     return true;
   };
 
@@ -250,6 +272,49 @@ export class AuthService {
       },
     );
   };
+
+  private setNewPassword = async (
+    userId: string,
+    newPassword: string,
+    confirmPassword: string,
+  ) => {
+    if (newPassword !== confirmPassword) {
+      throw new BadRequestException('Xác nhận mật khẩu không khớp!');
+    }
+
+    const user = await this.userService.findById(userId);
+    if (!user) throw new UnauthorizedException('Người dùng không tồn tại!');
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await this.userService.updatePassword(user.id, hashedPassword);
+    await this.revokeRefreshTokens(user.id);
+  };
+
+  private saveRefreshToken = async (user: User, token: string) => {
+    const decoded = jwt.decode(token) as jwt.JwtPayload | null;
+    if (!decoded?.exp) {
+      throw new BadRequestException('Refresh token không hợp lệ!');
+    }
+
+    await this.refreshTokenRepository.save(
+      this.refreshTokenRepository.create({
+        user_id: user.id,
+        token_hash: this.hashRefreshToken(token),
+        expires_at: new Date(decoded.exp * 1000),
+        revoked: 0,
+      }),
+    );
+  };
+
+  private revokeRefreshTokens = async (userId: string) => {
+    await this.refreshTokenRepository.update(
+      { user_id: userId, revoked: 0 },
+      { revoked: 1 },
+    );
+  };
+
+  private hashRefreshToken = (token: string) =>
+    createHash('sha256').update(token).digest('hex');
 
   private findUserByInput = async (input: string) => {
     const normalized = input.trim();

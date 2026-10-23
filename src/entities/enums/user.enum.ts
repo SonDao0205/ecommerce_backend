@@ -1,11 +1,10 @@
 export enum UserRole {
   CLIENT = `client`,
-  SHOP = `shop`,
+  SELLER = `seller`,
   ADMIN = `admin`,
 }
 
 export enum UserStatus {
-  BANNED = `banned`,
-  AVAILABLE = `available`,
-  UNAUTHORIZE = `unauthorize`,
+  ACTIVE = `ACTIVE`,
+  LOCKED = `LOCKED`,
 }

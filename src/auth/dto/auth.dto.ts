@@ -2,6 +2,7 @@ import {
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
 } from 'class-validator';
@@ -30,7 +31,7 @@ export class RegisterDto {
   @IsNotEmpty({
     message: 'Tên không được bỏ trống!',
   })
-  readonly name: string;
+  readonly full_name: string;
 
   @IsEmail(
     {},
@@ -48,11 +49,11 @@ export class RegisterDto {
   })
   readonly phone: string;
 
-  @IsNotEmpty({
-    message: 'Role không được bỏ trống!',
+  @IsOptional()
+  @IsEnum(UserRole, {
+    message: 'Role không đúng định dạng!',
   })
-  @IsEnum(UserRole)
-  readonly role: string;
+  readonly role?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -85,6 +86,20 @@ export class VerifyOtpDto {
 }
 
 export class ForgotPasswordDto {
+  @IsString()
+  @IsNotEmpty({
+    message: 'Mật khẩu không được bỏ trống!',
+  })
+  readonly newPassword: string;
+
+  @IsString()
+  @IsNotEmpty({
+    message: 'Xác nhận mật khẩu không được bỏ trống!',
+  })
+  readonly confirmPassword: string;
+}
+
+export class ChangePasswordDto {
   @IsString()
   @IsNotEmpty({
     message: 'Mật khẩu không được bỏ trống!',

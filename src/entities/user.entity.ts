@@ -8,71 +8,90 @@ import {
 } from 'typeorm';
 import { UserRole, UserStatus } from './enums/user.enum.js';
 
-@Entity('users')
+@Entity({ name: 'users' })
 export class User {
-  @PrimaryGeneratedColumn()
-  @Index()
+  @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
-
-  @Column({
-    name: `name`,
-    type: `varchar`,
-    length: 255,
-    nullable: false,
-  })
-  name: string;
 
   @Column({
     name: `email`,
     type: `varchar`,
-    length: 255,
+    length: 150,
     nullable: true,
+    unique: true,
   })
   @Index()
-  email: string;
+  email: string | null;
 
   @Column({
     name: `phone`,
     type: `varchar`,
-    length: 10,
+    length: 20,
     nullable: false,
+    unique: true,
   })
   @Index()
   phone: string;
 
   @Column({
-    name: `password`,
+    name: `password_hash`,
     type: `varchar`,
-    length: 255,
+    length: 100,
     nullable: false,
   })
-  password: string;
+  password_hash: string;
 
   @Column({
-    name: `role`,
+    name: `full_name`,
     type: `varchar`,
-    enum: UserRole,
-    default: UserRole.CLIENT,
+    length: 120,
+    nullable: false,
   })
-  role: string;
+  full_name: string;
+
+  @Column({
+    name: `avatar_url`,
+    type: `varchar`,
+    length: 500,
+    nullable: true,
+  })
+  avatar_url: string | null;
+
+  @Column({
+    name: `email_verified`,
+    type: `smallint`,
+    nullable: false,
+    default: 0,
+  })
+  email_verified: number;
 
   @Column({
     name: `status`,
     type: `varchar`,
-    enum: UserStatus,
-    default: UserStatus.AVAILABLE,
+    length: 20,
+    nullable: false,
+    default: UserStatus.ACTIVE,
   })
   status: string;
 
+  @Column({
+    name: `role`,
+    type: `varchar`,
+    length: 100,
+    nullable: true,
+    default: UserRole.CLIENT,
+  })
+  role: string;
+
   @CreateDateColumn({
     name: `created_at`,
-    type: `timestamptz`,
+    type: `timestamp`,
   })
   created_at: Date;
 
   @UpdateDateColumn({
     name: `updated_at`,
-    type: `timestamptz`,
+    type: `timestamp`,
   })
   updated_at: Date;
 }

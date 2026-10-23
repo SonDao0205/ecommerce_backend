@@ -12,6 +12,7 @@ import { AuthService } from './auth.service.js';
 import { ApiResponseData } from '../dto/response.js';
 import { UserResponse } from '../user/dto/user.response.js';
 import {
+  ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
   RegisterDto,
@@ -84,6 +85,20 @@ export class AuthController {
       true,
       'Xác thực OTP thành công!',
       response,
+      HttpStatus.OK,
+    );
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('/change-password')
+  async changePassword(@Req() req: Request, @Body() dto: ChangePasswordDto) {
+    const userId = (req as any).user?.id as string;
+    await this.authService.changePassword(dto, userId);
+
+    return new ApiResponseData<null>(
+      true,
+      'Đổi mật khẩu thành công!',
+      null,
       HttpStatus.OK,
     );
   }

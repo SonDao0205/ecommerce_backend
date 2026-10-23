@@ -1,4 +1,3 @@
-import { UserRole, UserStatus } from '../../entities/enums/user.enum.js';
 import { User } from '../../entities/user.entity.js';
 
 export class LoginResponse {

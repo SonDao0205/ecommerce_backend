@@ -2,6 +2,7 @@ import {
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
 } from 'class-validator';
@@ -14,7 +15,7 @@ export class CreateUserDto {
   @IsNotEmpty({
     message: 'Tên không được bỏ trống!',
   })
-  readonly name: string;
+  readonly full_name: string;
 
   @IsEmail(
     {},
@@ -32,13 +33,15 @@ export class CreateUserDto {
   })
   readonly phone: string;
 
-  @IsNotEmpty({
-    message: 'Role không được bỏ trống!',
+  @IsOptional()
+  @IsEnum(UserRole, {
+    message: 'Role không đúng định dạng!',
   })
-  @IsEnum(UserRole)
-  readonly role: string;
+  readonly role?: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({
+    message: 'Mật khẩu không được bỏ trống!',
+  })
   readonly password: string;
 }
