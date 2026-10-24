@@ -93,5 +93,21 @@ export class UserService {
     return new AddressResponse(created);
   };
 
+  updateEmailVerify = async (email: string) => {
+    const exist = await this.findByEmail(email);
+
+    if (!exist)
+      throw new NotFoundException('Email / Số điện thoại không tồn tại!');
+
+    if (exist.email_verified)
+      throw new BadRequestException('Tài khoản đã được xác thực!');
+    const updated = await this.userRepository.update(
+      { id: exist.id },
+      { email_verified: 1 },
+    );
+
+    return updated;
+  };
+
   convertToResponse = (user: User): UserResponse => new UserResponse(user);
 }

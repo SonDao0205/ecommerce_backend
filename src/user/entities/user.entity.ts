@@ -4,12 +4,14 @@ import {
   Entity,
   Index,
   OneToMany,
+  OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { UserRole, UserStatus } from './enums/user.enum.js';
 import { Address } from './address.entity.js';
 import { RefreshToken } from '../../auth/entities/refresh-token.entity.js';
+import { Shop } from '../../shop/entities/shop.entity.js';
 
 @Entity({ name: 'users' })
 export class User {
@@ -103,4 +105,7 @@ export class User {
 
   @OneToMany(() => RefreshToken, (token) => token.user)
   refresh_tokens: RefreshToken[];
+
+  @OneToOne(() => Shop, (shop) => shop.user)
+  shop: Shop;
 }

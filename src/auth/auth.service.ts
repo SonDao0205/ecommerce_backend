@@ -211,8 +211,6 @@ export class AuthService {
     try {
       await this.mailService.sendPasswordResetOtp(email, otp);
     } catch (error) {
-      console.log('error : ', error);
-
       this.otpStore.delete(otpKey);
       if (error instanceof ServiceUnavailableException) throw error;
       throw new ServiceUnavailableException(

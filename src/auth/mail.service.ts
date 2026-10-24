@@ -22,8 +22,6 @@ export class MailService {
         html: `<p>Mã OTP đặt lại mật khẩu của bạn là:</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px">${otp}</p><p>Mã có hiệu lực trong 5 phút. Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này.</p>`,
       });
     } catch (error) {
-      console.log('error 2:', error);
-
       throw new ServiceUnavailableException(
         'Không thể gửi email OTP lúc này. Vui lòng thử lại sau.',
       );

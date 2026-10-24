@@ -8,6 +8,8 @@ import { AppService } from './app.service.js';
 import { databaseConfig } from './config/database/config.database.js';
 import { UserModule } from './user/user.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { AdminModule } from './admin/admin.module.js';
+import { ShopModule } from './shop/shop.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -36,6 +38,8 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     }),
     UserModule,
     AuthModule,
+    AdminModule,
+    ShopModule,
   ],
   controllers: [AppController],
   providers: [AppService],
