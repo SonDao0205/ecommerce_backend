@@ -55,7 +55,10 @@ export class CloudinaryService {
     file: UploadImageFile,
     key: CloudinaryImageKey,
   ): Promise<CloudinaryUploadResult> {
-    if (!isAllowedImageMimeType(file.mimetype) || !this.matchesImageSignature(file)) {
+    if (
+      !isAllowedImageMimeType(file.mimetype) ||
+      !this.matchesImageSignature(file)
+    ) {
       throw new BadRequestException(
         'Chỉ chấp nhận ảnh JPEG, PNG, WebP hoặc GIF đúng định dạng.',
       );
@@ -65,20 +68,20 @@ export class CloudinaryService {
   }
 
   async deleteImage(publicId: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      cloudinary.uploader.destroy(
-        publicId,
-        { resource_type: 'image', invalidate: true },
-        (error, result) => {
-          if (error || (result?.result !== 'ok' && result?.result !== 'not found')) {
-            reject(error ?? new Error('Cloudinary không thể xóa ảnh đã upload.'));
-            return;
-          }
+    try {
+      const result = await cloudinary.uploader.destroy(publicId, {
+        resource_type: 'image',
+        invalidate: true,
+      });
 
-          resolve();
-        },
+      if (result.result !== 'ok' && result.result !== 'not found') {
+        throw new Error('Cloudinary không thể xóa ảnh đã upload.');
+      }
+    } catch {
+      throw new InternalServerErrorException(
+        'Không thể xóa ảnh khỏi Cloudinary.',
       );
-    });
+    }
   }
 
   private async uploadValidatedImage(
@@ -94,7 +97,9 @@ export class CloudinaryService {
           },
           (error, result) => {
             if (error || !result) {
-              reject(error ?? new Error('Cloudinary không trả về kết quả upload.'));
+              reject(
+                error ?? new Error('Cloudinary không trả về kết quả upload.'),
+              );
               return;
             }
 
@@ -112,7 +117,9 @@ export class CloudinaryService {
         upload.end(file.buffer);
       });
     } catch {
-      throw new InternalServerErrorException('Không thể tải ảnh lên Cloudinary.');
+      throw new InternalServerErrorException(
+        'Không thể tải ảnh lên Cloudinary.',
+      );
     }
   }
 
@@ -130,7 +137,9 @@ export class CloudinaryService {
       case 'image/png':
         return (
           bytes.length >= 8 &&
-          bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+          bytes
+            .subarray(0, 8)
+            .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
         );
       case 'image/webp':
         return (

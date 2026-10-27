@@ -12,11 +12,13 @@ import { Repository } from 'typeorm';
 import { ShopFollower } from './entities/shop_follower.entity.js';
 import { CreateShopDto } from './dto/create-shop.dto.js';
 import { UpdateShopDto } from './dto/update-shop.dto.js';
-import { User } from '../user/entities/user.entity.js';
 import { ShopStatus } from './entities/enum/shop.enum.js';
 import { UserRole } from '../user/entities/enums/user.enum.js';
 import { UserService } from '../user/user.service.js';
-import { CloudinaryImageKey, CloudinaryService } from '../cloudinary/cloudinary.service.js';
+import {
+  CloudinaryImageKey,
+  CloudinaryService,
+} from '../cloudinary/cloudinary.service.js';
 import type {
   CloudinaryUploadResult,
   UploadImageFile,
@@ -126,7 +128,12 @@ export class ShopService {
     }
 
     const assignOptionalString = (
-      field: 'description' | 'logo_url' | 'banner_url' | 'phone' | 'warehouse_address',
+      field:
+        | 'description'
+        | 'logo_url'
+        | 'banner_url'
+        | 'phone'
+        | 'warehouse_address',
     ) => {
       if (!Object.prototype.hasOwnProperty.call(dto, field)) return;
 

@@ -51,7 +51,12 @@ export class CloudinaryController {
     @Body('key') keyValue: string | undefined,
     @UploadedFile() file?: UploadImageFile,
   ): Promise<ApiResponseData<CloudinaryUploadResult>> {
-    if (!keyValue || !Object.values(CloudinaryImageKey).includes(keyValue as CloudinaryImageKey)) {
+    if (
+      !keyValue ||
+      !Object.values(CloudinaryImageKey).includes(
+        keyValue as CloudinaryImageKey,
+      )
+    ) {
       throw new BadRequestException(
         `Key ảnh không hợp lệ. Các key được hỗ trợ: ${Object.values(CloudinaryImageKey).join(', ')}.`,
       );

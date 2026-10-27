@@ -72,7 +72,7 @@ export class UserService {
     });
     if (existPhone) throw new BadRequestException('Số điện thoại đã tồn tại!');
 
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
     const created = await this.userRepository.save(
       this.userRepository.create({
         full_name: full_name.trim(),
@@ -89,10 +89,25 @@ export class UserService {
   };
 
   createAddress = async (dto: CreateAddressDto, userId: string) => {
+    const {
+      recipient_name,
+      phone,
+      province,
+      district,
+      ward,
+      street_detail,
+      is_default,
+    } = dto;
     const existUser = await this.findById(userId);
 
     const value = {
-      ...dto,
+      recipient_name,
+      phone,
+      province,
+      district,
+      ward,
+      street_detail,
+      is_default,
       user: existUser,
     };
     const created = await this.addressRepository.save(

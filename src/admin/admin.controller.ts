@@ -1,4 +1,4 @@
-import { Body, Controller, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Patch, Req, UseGuards } from '@nestjs/common';
 import { AdminService } from './admin.service.js';
 import { VerifySellerDto } from './dto/verify-seller.dto.js';
 import { AuthGuard } from '../middleware/guard/auth.guard.js';
