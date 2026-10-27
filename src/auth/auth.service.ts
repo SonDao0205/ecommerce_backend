@@ -26,6 +26,7 @@ import { RefreshToken } from './entities/refresh-token.entity.js';
 import { UserStatus } from '../user/entities/enums/user.enum.js';
 import { User } from '../user/entities/user.entity.js';
 import { MailService } from './mail.service.js';
+import { UserRole } from '../user/entities/enums/user.enum.js';
 
 type OtpRecord = {
   otp: string;
@@ -53,7 +54,7 @@ export class AuthService {
       full_name: dto.full_name,
       email: dto.email,
       phone: dto.phone,
-      role: dto.role,
+      role: dto.role ?? UserRole.CLIENT,
       password: dto.password,
     });
   };
@@ -62,11 +63,6 @@ export class AuthService {
     const { input, password } = dto;
 
     const exist = await this.findUserByInput(input);
-    if (!exist) {
-      throw new NotFoundException(
-        'Email / Số điện thoại hoặc mật khẩu không đúng!',
-      );
-    }
 
     const isMatch = await bcrypt.compare(password.trim(), exist.password_hash);
     if (!isMatch) {
@@ -166,7 +162,6 @@ export class AuthService {
     }
 
     const user = await this.userService.findById(payload.id as string);
-    if (!user) throw new UnauthorizedException('Người dùng không tồn tại!');
     if (user.status === UserStatus.LOCKED) {
       throw new ForbiddenException('Tài khoản đã bị khóa!');
     }
@@ -183,7 +178,6 @@ export class AuthService {
 
   getMe = async (userId: string) => {
     const user = await this.userService.findById(userId);
-    if (!user) throw new NotFoundException('Người dùng không tồn tại!');
     return this.userService.convertToResponse(user);
   };
 
@@ -195,10 +189,6 @@ export class AuthService {
 
     const otpKey = email.toLowerCase();
     const exist = await this.userService.findByEmail(email);
-
-    if (!exist) {
-      throw new NotFoundException('Email không tồn tại!');
-    }
 
     const otp = this.generateOtp();
     this.otpStore.set(otpKey, {
@@ -243,13 +233,8 @@ export class AuthService {
       throw new BadRequestException('OTP không chính xác!');
     }
 
-    const user = await this.userService.findById(record.userId);
-    if (!user) {
-      this.otpStore.delete(input);
-      throw new NotFoundException('Người dùng không tồn tại!');
-    }
-
     this.otpStore.delete(input);
+    const user = await this.userService.findById(record.userId);
 
     return { reset_token: this.createResetPasswordToken(user) };
   };
@@ -296,7 +281,6 @@ export class AuthService {
     }
 
     const user = await this.userService.findById(userId);
-    if (!user) throw new UnauthorizedException('Người dùng không tồn tại!');
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await this.userService.updatePassword(user.id, hashedPassword);

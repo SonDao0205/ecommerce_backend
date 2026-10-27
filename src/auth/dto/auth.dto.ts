@@ -1,6 +1,6 @@
 import {
   IsEmail,
-  IsEnum,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -50,10 +50,10 @@ export class RegisterDto {
   readonly phone: string;
 
   @IsOptional()
-  @IsEnum(UserRole, {
-    message: 'Role không đúng định dạng!',
+  @IsIn([UserRole.CLIENT, UserRole.SELLER], {
+    message: 'Khi đăng ký chỉ được chọn role client hoặc seller!',
   })
-  readonly role?: string;
+  readonly role?: UserRole;
 
   @IsString()
   @IsNotEmpty()

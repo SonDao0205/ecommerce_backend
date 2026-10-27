@@ -3,6 +3,7 @@ import {
   CreateDateColumn,
   Entity,
   JoinColumn,
+  OneToMany,
   OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
@@ -10,13 +11,14 @@ import {
 import type { Relation } from 'typeorm';
 import { User } from '../../user/entities/user.entity.js';
 import { ShopStatus } from './enum/shop.enum.js';
+import { ShopFollower } from './shop_follower.entity.js';
 
-@Entity({ name: 'shop' })
+@Entity({ name: 'shops' })
 export class Shop {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
 
-  @OneToOne(() => User, (user) => user.shop)
+  @OneToOne(() => User, (user) => user.shop, { nullable: false })
   @JoinColumn({ name: 'owner_id' })
   user: Relation<User>;
 
@@ -34,15 +36,15 @@ export class Shop {
     type: 'text',
     nullable: true,
   })
-  description: string;
+  description: string | null;
 
   @Column({
-    name: 'description',
+    name: 'logo_url',
     type: 'varchar',
     length: 500,
     nullable: true,
   })
-  logo_url: string;
+  logo_url: string | null;
 
   @Column({
     name: 'banner_url',
@@ -50,7 +52,7 @@ export class Shop {
     length: 500,
     nullable: true,
   })
-  banner_url: string;
+  banner_url: string | null;
 
   @Column({
     name: 'phone',
@@ -58,7 +60,7 @@ export class Shop {
     length: 20,
     nullable: true,
   })
-  phone: string;
+  phone: string | null;
 
   @Column({
     name: 'warehouse_address',
@@ -66,7 +68,7 @@ export class Shop {
     length: 500,
     nullable: true,
   })
-  warehouse_address: string;
+  warehouse_address: string | null;
 
   @Column({
     name: 'status',
@@ -83,7 +85,7 @@ export class Shop {
     length: 500,
     nullable: true,
   })
-  reject_reason: string;
+  reject_reason: string | null;
 
   @Column({
     name: 'follower_count',
@@ -98,7 +100,7 @@ export class Shop {
     type: `timestamp`,
     nullable: true,
   })
-  approved_at: Date;
+  approved_at: Date | null;
 
   @CreateDateColumn({
     name: `created_at`,
@@ -111,4 +113,7 @@ export class Shop {
     type: `timestamp`,
   })
   updated_at: Date;
+
+  @OneToMany(() => ShopFollower, (shopFollower) => shopFollower.shop)
+  followers: Relation<ShopFollower[]>;
 }

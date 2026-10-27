@@ -23,28 +23,34 @@ export class UserService {
   ) {}
 
   findByEmail = async (email: string) => {
-    return await this.userRepository.findOne({
+    const user = await this.userRepository.findOne({
       where: {
         email: ILike(email.trim()),
       },
     });
+    if (!user) throw new NotFoundException('Người dùng không tồn tại!');
+
+    return user;
   };
 
   findByPhone = async (phone: string) => {
-    return await this.userRepository.findOne({
+    const user = await this.userRepository.findOne({
       where: {
         phone: phone.trim(),
       },
     });
+    if (!user) throw new NotFoundException('Người dùng không tồn tại!');
+    return user;
   };
 
   findById = async (id: string) => {
-    return await this.userRepository.findOne({ where: { id } });
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Người dùng không tồn tại!');
+    return user;
   };
 
   updatePassword = async (userId: string, hashedPassword: string) => {
-    const user = await this.findById(userId);
-    if (!user) throw new NotFoundException('Người dùng không tồn tại!');
+    await this.findById(userId);
 
     await this.userRepository.update(
       { id: userId },
@@ -56,10 +62,14 @@ export class UserService {
   createUser = async (dto: CreateUserDto) => {
     const { email, phone, full_name, role, password } = dto;
     if (email) {
-      const existEmail = await this.findByEmail(email);
+      const existEmail = await this.userRepository.findOne({
+        where: { email: ILike(email.trim()) },
+      });
       if (existEmail) throw new BadRequestException('Email đã tồn tại!');
     }
-    const existPhone = await this.findByPhone(phone);
+    const existPhone = await this.userRepository.findOne({
+      where: { phone: phone.trim() },
+    });
     if (existPhone) throw new BadRequestException('Số điện thoại đã tồn tại!');
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -80,7 +90,6 @@ export class UserService {
 
   createAddress = async (dto: CreateAddressDto, userId: string) => {
     const existUser = await this.findById(userId);
-    if (!existUser) throw new NotFoundException('Người dùng không tồn tại!');
 
     const value = {
       ...dto,
@@ -95,9 +104,6 @@ export class UserService {
 
   updateEmailVerify = async (email: string) => {
     const exist = await this.findByEmail(email);
-
-    if (!exist)
-      throw new NotFoundException('Email / Số điện thoại không tồn tại!');
 
     if (exist.email_verified)
       throw new BadRequestException('Tài khoản đã được xác thực!');

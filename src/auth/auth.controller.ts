@@ -22,6 +22,7 @@ import {
 import { LoginResponse } from './dto/auth.response.js';
 import { AuthGuard } from '../middleware/guard/auth.guard.js';
 import { ResetPasswordGuard } from '../middleware/guard/reset-password.guard.js';
+import { UserRole } from '../user/entities/enums/user.enum.js';
 
 @Controller('api/v1/auth')
 export class AuthController {
@@ -33,7 +34,9 @@ export class AuthController {
 
     return new ApiResponseData<UserResponse>(
       true,
-      'Đăng ký tài khoản thành công!',
+      dto.role === UserRole.SELLER
+        ? 'Tạo tài khoản seller thành công! Hãy gửi yêu cầu tạo shop riêng.'
+        : 'Đăng ký tài khoản thành công!',
       response,
       HttpStatus.CREATED,
     );

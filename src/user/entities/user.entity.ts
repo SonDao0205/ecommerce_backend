@@ -12,6 +12,7 @@ import { UserRole, UserStatus } from './enums/user.enum.js';
 import { Address } from './address.entity.js';
 import { RefreshToken } from '../../auth/entities/refresh-token.entity.js';
 import { Shop } from '../../shop/entities/shop.entity.js';
+import { ShopFollower } from '../../shop/entities/shop_follower.entity.js';
 
 @Entity({ name: 'users' })
 export class User {
@@ -108,4 +109,7 @@ export class User {
 
   @OneToOne(() => Shop, (shop) => shop.user)
   shop: Shop;
+
+  @OneToMany(() => ShopFollower, (shopFollower) => shopFollower.user)
+  shop_follows: ShopFollower[];
 }

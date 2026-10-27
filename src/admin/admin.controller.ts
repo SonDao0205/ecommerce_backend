@@ -7,7 +7,7 @@ import { UserRole } from '../user/entities/enums/user.enum.js';
 import type { Request } from 'express';
 import { ApiResponseData } from '../dto/response.js';
 
-@Controller('admin')
+@Controller('/api/v1/admin')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 

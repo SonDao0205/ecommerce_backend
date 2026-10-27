@@ -7,16 +7,19 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 ## 1. Trang bán hàng (Customer / Storefront)
 
 ### Tài khoản & xác thực
-- [ ] Đăng ký, đăng nhập (email/SĐT, Google/Facebook), quên mật khẩu
-- [ ] Quản lý hồ sơ cá nhân, sổ địa chỉ giao hàng
+
+- [ x ] Đăng ký, đăng nhập (email/SĐT, Google/Facebook), quên mật khẩu
+- [ x ] Quản lý hồ sơ cá nhân, sổ địa chỉ giao hàng
 
 ### Duyệt & tìm sản phẩm
+
 - [ ] Trang chủ (banner, danh mục nổi bật, flash sale, gợi ý)
 - [ ] Danh mục sản phẩm, tìm kiếm, lọc (giá, thương hiệu, đánh giá, shop), sắp xếp
 - [ ] Trang chi tiết sản phẩm (ảnh, mô tả, biến thể size/màu, tồn kho, đánh giá)
 - [ ] Trang shop (xem sản phẩm của từng shop, theo dõi shop)
 
 ### Mua hàng
+
 - [ ] Giỏ hàng (thêm/sửa/xóa, gộp theo shop)
 - [ ] Wishlist / yêu thích
 - [ ] Checkout: chọn địa chỉ, phương thức vận chuyển, thanh toán
@@ -24,6 +27,7 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 - [ ] Thanh toán: COD, chuyển khoản, ví điện tử, thẻ (VNPay, MoMo, Stripe...)
 
 ### Sau mua hàng
+
 - [ ] Lịch sử đơn hàng, theo dõi trạng thái đơn
 - [ ] Hủy đơn, yêu cầu đổi/trả/hoàn tiền
 - [ ] Đánh giá & bình luận sản phẩm
@@ -34,8 +38,8 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 
 ## 2. Quản lý shop (Seller / Vendor)
 
-- [ ] Đăng ký mở shop, chờ admin duyệt
-- [ ] Quản lý thông tin shop (logo, banner, mô tả, địa chỉ kho)
+- [ x ] Đăng ký mở shop, chờ admin duyệt
+- [ x ] Quản lý thông tin shop (logo, banner, mô tả, địa chỉ kho)
 - [ ] **Quản lý sản phẩm:** thêm/sửa/xóa, biến thể (SKU), ảnh, giá, tồn kho
 - [ ] **Quản lý đơn hàng:** xác nhận, đóng gói, giao cho đơn vị vận chuyển, xử lý hủy/trả
 - [ ] Quản lý khuyến mãi, voucher riêng của shop
@@ -76,9 +80,9 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 
 ## Gợi ý lộ trình làm (MVP trước)
 
-| Giai đoạn | Nội dung |
-|-----------|----------|
-| 1 | Auth + sản phẩm + giỏ hàng + đặt hàng (COD) + admin cơ bản |
-| 2 | Multi-shop (seller portal), voucher, thanh toán online |
-| 3 | Chat, đánh giá, đối soát/hoa hồng, thống kê |
-| 4 | Tối ưu (cache, search, queue), tích hợp vận chuyển |
+| Giai đoạn | Nội dung                                                   |
+| --------- | ---------------------------------------------------------- |
+| 1         | Auth + sản phẩm + giỏ hàng + đặt hàng (COD) + admin cơ bản |
+| 2         | Multi-shop (seller portal), voucher, thanh toán online     |
+| 3         | Chat, đánh giá, đối soát/hoa hồng, thống kê                |
+| 4         | Tối ưu (cache, search, queue), tích hợp vận chuyển         |
