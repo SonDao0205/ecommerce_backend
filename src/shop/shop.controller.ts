@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   HttpStatus,
+  Param,
   Patch,
   Post,
   Req,
@@ -15,6 +16,7 @@ import type { Request } from 'express';
 import { ShopService } from './shop.service.js';
 import { AuthGuard } from '../middleware/guard/auth.guard.js';
 import { Roles, RolesGuard } from '../middleware/guard/roles.guard.js';
+import { EmailVerifiedGuard } from '../middleware/guard/email-verified.guard.js';
 import { UserRole } from '../user/entities/enums/user.enum.js';
 import { CreateShopDto } from './dto/create-shop.dto.js';
 import { UpdateShopDto } from './dto/update-shop.dto.js';
@@ -30,7 +32,7 @@ export class ShopController {
   constructor(private readonly shopService: ShopService) {}
 
   @Roles(UserRole.SELLER)
-  @UseGuards(AuthGuard, RolesGuard)
+  @UseGuards(AuthGuard, EmailVerifiedGuard, RolesGuard)
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -77,7 +79,7 @@ export class ShopController {
   }
 
   @Roles(UserRole.SELLER)
-  @UseGuards(AuthGuard, RolesGuard)
+  @UseGuards(AuthGuard, EmailVerifiedGuard, RolesGuard)
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -120,6 +122,22 @@ export class ShopController {
       'Cập nhật thông tin shop thành công!',
       new ShopResponse(shop),
       HttpStatus.OK,
+    );
+  }
+
+  @UseGuards(AuthGuard, EmailVerifiedGuard)
+  @Post('/follow/:shop_id')
+  async followShop(@Req() req: Request, @Param(`shop_id`) shop_id: string) {
+    const userId = (req as any).user?.id as string;
+    const followedShop = await this.shopService.followShop(userId, shop_id);
+
+    return new ApiResponseData<boolean>(
+      true,
+      followedShop
+        ? `Đã theo dõi shop thành công!`
+        : `Đã huỷ theo dõi shop thành công!`,
+      followedShop,
+      201,
     );
   }
 }

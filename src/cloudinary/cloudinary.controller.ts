@@ -11,6 +11,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiResponseData } from '../dto/response.js';
 import { AuthGuard } from '../middleware/guard/auth.guard.js';
+import { EmailVerifiedGuard } from '../middleware/guard/email-verified.guard.js';
 import { CloudinaryService } from './cloudinary.service.js';
 import type {
   CloudinaryUploadResult,
@@ -28,7 +29,7 @@ export class CloudinaryController {
   constructor(private readonly cloudinaryService: CloudinaryService) {}
 
   @Post('upload')
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, EmailVerifiedGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: MAX_IMAGE_SIZE, files: 1 },

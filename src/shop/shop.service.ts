@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  flatten,
   ForbiddenException,
   Inject,
   Injectable,
@@ -33,6 +34,12 @@ export class ShopService {
     @Inject() private readonly userService: UserService,
     @Inject() private readonly cloudinaryService: CloudinaryService,
   ) {}
+
+  findById = async (shopId: string) => {
+    return await this.shopRepository.findOne({
+      where: { id: shopId },
+    });
+  };
 
   createShop = async (
     dto: CreateShopDto,
@@ -178,5 +185,36 @@ export class ShopService {
       );
       throw error;
     }
+  };
+
+  followShop = async (userId: string, shopId: string): Promise<boolean> => {
+    const shop = await this.findById(shopId);
+
+    if (!shop) {
+      throw new NotFoundException('Không tìm thấy Shop hợp lệ!');
+    }
+
+    if (shop.status !== ShopStatus.ACTIVE)
+      throw new BadRequestException(`Shop chưa được phê duyệt!`);
+
+    const shopFollower = await this.shopFollowerRepository.findOne({
+      where: {
+        shop: { id: shopId },
+        user: { id: userId },
+      },
+    });
+
+    if (shopFollower) {
+      await this.shopFollowerRepository.remove(shopFollower);
+      return false;
+    }
+
+    const newShopFollower = this.shopFollowerRepository.create({
+      shop_id: shopId,
+      user_id: userId,
+    });
+
+    await this.shopFollowerRepository.save(newShopFollower);
+    return true;
   };
 }

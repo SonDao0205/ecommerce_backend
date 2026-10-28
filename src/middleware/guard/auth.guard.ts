@@ -1,12 +1,14 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
 import { Request } from 'express';
+import { UserService } from '../../user/user.service.js';
+import { UserStatus } from '../../user/entities/enums/user.enum.js';
 
 /**
  * AuthGuard — Xác thực JWT Token
@@ -22,7 +24,7 @@ import { Request } from 'express';
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
+  constructor(private readonly userService: UserService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // ── Giai đoạn 1: Lấy HTTP request từ execution context ──────────────────
@@ -53,21 +55,40 @@ export class AuthGuard implements CanActivate {
       );
     }
 
+    let payload: jwt.JwtPayload;
     try {
-      const payload = jwt.verify(token, secret, {
+      payload = jwt.verify(token, secret, {
         algorithms: ['HS256'],
       }) as jwt.JwtPayload;
-
-      // ── Giai đoạn 4: Đính kèm payload vào request ─────────────────────────
-      // Lưu thông tin user đã decode vào request.user để các handler
-      // ở phía sau (controller, RolesGuard…) có thể tái sử dụng,
-      // tránh phải decode lại token nhiều lần.
-      (request as any).user = payload;
     } catch {
       throw new UnauthorizedException(
         'Phiên đăng nhập đã hết hạn hoặc không hợp lệ!',
       );
     }
+
+    if (!payload.id) {
+      throw new UnauthorizedException(
+        'Phiên đăng nhập đã hết hạn hoặc không hợp lệ!',
+      );
+    }
+
+    // Đọc trạng thái mới nhất từ DB để khóa tài khoản ngay cả khi
+    // access token được cấp trước thời điểm tài khoản bị khóa.
+    const user = await this.userService.findById(String(payload.id));
+    if (user.status === UserStatus.LOCKED) {
+      throw new ForbiddenException(
+        'Tài khoản đã bị khóa, không thể thực hiện thao tác!',
+      );
+    }
+
+    // Gắn dữ liệu mới nhất vào request để các guard sau dùng tiếp.
+    (request as any).user = {
+      ...payload,
+      id: user.id,
+      role: user.role,
+      status: user.status,
+      email_verified: user.email_verified,
+    };
 
     // ── Giai đoạn 5: Cho phép tiếp tục ─────────────────────────────────────
     // Trả về true → NestJS chuyển request tới handler tiếp theo.

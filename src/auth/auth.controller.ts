@@ -21,6 +21,7 @@ import {
 } from './dto/auth.dto.js';
 import { LoginResponse } from './dto/auth.response.js';
 import { AuthGuard } from '../middleware/guard/auth.guard.js';
+import { EmailVerifiedGuard } from '../middleware/guard/email-verified.guard.js';
 import { ResetPasswordGuard } from '../middleware/guard/reset-password.guard.js';
 import { UserRole } from '../user/entities/enums/user.enum.js';
 
@@ -92,7 +93,7 @@ export class AuthController {
     );
   }
 
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, EmailVerifiedGuard)
   @Post('/change-password')
   async changePassword(@Req() req: Request, @Body() dto: ChangePasswordDto) {
     const userId = (req as any).user?.id as string;

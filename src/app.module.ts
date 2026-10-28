@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { ShopModule } from './shop/shop.module.js';
 import { CloudinaryModule } from './cloudinary/cloudinary.module.js';
+import { ProductModule } from './product/product.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -42,6 +43,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AdminModule,
     ShopModule,
     CloudinaryModule,
+    ProductModule,
   ],
   controllers: [AppController],
   providers: [AppService],

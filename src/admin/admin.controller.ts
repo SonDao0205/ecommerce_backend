@@ -3,6 +3,7 @@ import { AdminService } from './admin.service.js';
 import { VerifySellerDto } from './dto/verify-seller.dto.js';
 import { AuthGuard } from '../middleware/guard/auth.guard.js';
 import { Roles, RolesGuard } from '../middleware/guard/roles.guard.js';
+import { EmailVerifiedGuard } from '../middleware/guard/email-verified.guard.js';
 import { UserRole } from '../user/entities/enums/user.enum.js';
 import type { Request } from 'express';
 import { ApiResponseData } from '../dto/response.js';
@@ -12,7 +13,7 @@ export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
   @Roles(UserRole.ADMIN)
-  @UseGuards(AuthGuard, RolesGuard)
+  @UseGuards(AuthGuard, EmailVerifiedGuard, RolesGuard)
   @Patch('/verify-seller')
   async verifySeller(@Req() req: Request, @Body() dto: VerifySellerDto) {
     const response = await this.adminService.verifySeller(dto);
