@@ -40,7 +40,7 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 
 - [ x ] Đăng ký mở shop, chờ admin duyệt
 - [ x ] Quản lý thông tin shop (logo, banner, mô tả, địa chỉ kho)
-- [ ] **Quản lý sản phẩm:** thêm/sửa/xóa, biến thể (SKU), ảnh, giá, tồn kho
+- [ x ] **Quản lý sản phẩm:** thêm/sửa/xóa, biến thể (SKU), ảnh, giá, tồn kho
 - [ ] **Quản lý đơn hàng:** xác nhận, đóng gói, giao cho đơn vị vận chuyển, xử lý hủy/trả
 - [ ] Quản lý khuyến mãi, voucher riêng của shop
 - [ ] Trả lời chat, đánh giá của khách

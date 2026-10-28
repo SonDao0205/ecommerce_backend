@@ -15,6 +15,7 @@ import type { Relation } from 'typeorm';
 import { Product } from './product.entity.js';
 import { VariantAttributeValue } from './variant_attribute_value.entity.js';
 import { ProductVariantStatus } from './enum/product.enum.js';
+import { CartItem } from '../../cart/entities/cart-item.entity.js';
 
 @Entity({ name: 'product_variants' })
 @Unique('uq_variants_sku', ['sku'])
@@ -73,4 +74,7 @@ export class ProductVariant {
     (attributeValue) => attributeValue.variant,
   )
   attribute_values: Relation<VariantAttributeValue[]>;
+
+  @OneToMany(() => CartItem, (cartItem) => cartItem.variant)
+  cart_items: Relation<CartItem[]>;
 }

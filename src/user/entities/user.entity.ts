@@ -13,6 +13,7 @@ import { Address } from './address.entity.js';
 import { RefreshToken } from '../../auth/entities/refresh-token.entity.js';
 import { Shop } from '../../shop/entities/shop.entity.js';
 import { ShopFollower } from '../../shop/entities/shop_follower.entity.js';
+import { Cart } from '../../cart/entities/cart.entity.js';
 
 @Entity({ name: 'users' })
 export class User {
@@ -112,4 +113,7 @@ export class User {
 
   @OneToMany(() => ShopFollower, (shopFollower) => shopFollower.user)
   shop_follows: ShopFollower[];
+
+  @OneToOne(() => Cart, (cart) => cart.user)
+  cart: Cart;
 }
