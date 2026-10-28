@@ -3,11 +3,13 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   Unique,
 } from 'typeorm';
 import type { Relation } from 'typeorm';
 import { Attributes } from './attributes.entity.js';
+import { VariantAttributeValue } from '../../product/entities/variant_attribute_value.entity.js';
 
 @Entity({ name: 'attribute_values' })
 @Unique('uq_attribute_values', ['attribute_id', 'value'])
@@ -27,4 +29,10 @@ export class AttributeValues {
 
   @Column({ name: 'value', type: 'varchar', length: 100, nullable: false })
   value: string;
+
+  @OneToMany(
+    () => VariantAttributeValue,
+    (variantAttributeValue) => variantAttributeValue.attribute_value,
+  )
+  variants: Relation<VariantAttributeValue[]>;
 }
