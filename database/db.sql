@@ -148,6 +148,18 @@ CREATE TABLE attribute_values (
   CONSTRAINT fk_attribute_values_attr FOREIGN KEY (attribute_id) REFERENCES attributes (id) ON DELETE CASCADE
 );
 
+-- Thuộc tính biến thể được hỗ trợ cho từng danh mục; giá trị cụ thể do sản phẩm khai báo.
+CREATE TABLE category_attributes (
+  category_id  BIGINT NOT NULL,
+  attribute_id BIGINT NOT NULL,
+  PRIMARY KEY (category_id, attribute_id),
+  CONSTRAINT fk_category_attributes_category
+    FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE,
+  CONSTRAINT fk_category_attributes_attribute
+    FOREIGN KEY (attribute_id) REFERENCES attributes (id) ON DELETE CASCADE
+);
+CREATE INDEX idx_category_attributes_attribute ON category_attributes (attribute_id);
+
 -- ---------------------------------------------------------------------
 -- 4. SẢN PHẨM, BIẾN THỂ (SKU), TỒN KHO
 -- ---------------------------------------------------------------------

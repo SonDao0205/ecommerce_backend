@@ -68,7 +68,7 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 
 ## 4. Chức năng nền tảng (Cross-cutting)
 
-- [ ] Upload & lưu trữ ảnh (S3/Cloudinary...)
+- [ x ] Upload & lưu trữ ảnh (S3/Cloudinary...)
 - [ ] Gửi email/SMS/push notification
 - [ ] Tìm kiếm (Elasticsearch hoặc full-text của DB khi lớn)
 - [ ] Cache (Redis), queue cho tác vụ nặng (gửi mail, xử lý đơn)
