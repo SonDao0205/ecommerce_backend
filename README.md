@@ -20,8 +20,8 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 
 ### Mua hàng
 
-- [ ] Giỏ hàng (thêm/sửa/xóa, gộp theo shop)
-- [ ] Wishlist / yêu thích
+- [ x ] Giỏ hàng (thêm/sửa/xóa, gộp theo shop)
+- [ x ] Wishlist / yêu thích
 - [ ] Checkout: chọn địa chỉ, phương thức vận chuyển, thanh toán
 - [ ] Áp mã giảm giá (voucher của sàn và của shop)
 - [ ] Thanh toán: COD, chuyển khoản, ví điện tử, thẻ (VNPay, MoMo, Stripe...)

@@ -117,13 +117,13 @@ export class UserService {
     return new AddressResponse(created);
   };
 
-  updateEmailVerify = async (email: string) => {
-    const exist = await this.findByEmail(email);
+  updateEmailVerify = async (id: string) => {
+    const exist = await this.findById(id);
 
     if (exist.email_verified)
       throw new BadRequestException('Tài khoản đã được xác thực!');
     const updated = await this.userRepository.update(
-      { id: exist.id },
+      { id: id },
       { email_verified: 1 },
     );
 

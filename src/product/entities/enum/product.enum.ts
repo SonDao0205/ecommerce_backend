@@ -10,3 +10,8 @@ export enum ProductVariantStatus {
   ACTIVE = 'ACTIVE',
   INACTIVE = 'INACTIVE',
 }
+
+export enum ProductReviewStatus {
+  ACTIVE = ProductStatus.ACTIVE,
+  REJECTED = ProductStatus.REJECTED,
+}

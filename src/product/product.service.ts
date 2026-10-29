@@ -56,6 +56,19 @@ export class ProductService {
     private readonly productVariantService: ProductVariantService,
   ) {}
 
+  /** Đọc một sản phẩm cùng ảnh và biến thể để AdminService xử lý duyệt. */
+  findForVerification = async (productId: string): Promise<Product | null> => {
+    return this.productRepository.findOne({
+      where: { id: productId },
+      relations: { images: true, variants: true },
+    });
+  };
+
+  /** Lưu thay đổi của sản phẩm đã được AdminService quyết định. */
+  saveProduct = async (product: Product): Promise<Product> => {
+    return this.productRepository.save(product);
+  };
+
   /**
    * Tạo sản phẩm mới cho shop của seller.
    * Luồng: kiểm tra shop/category/brand và slug -> upload ảnh -> ghi product,
