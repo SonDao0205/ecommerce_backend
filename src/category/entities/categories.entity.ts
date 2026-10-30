@@ -14,6 +14,7 @@ import { CategoryAttribute } from './category_attribute.entity.js';
 
 @Entity({ name: 'categories' })
 @Index('idx_categories_parent', ['parent_id'])
+@Index('idx_categories_search_gin', { synchronize: false })
 export class Categories {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;

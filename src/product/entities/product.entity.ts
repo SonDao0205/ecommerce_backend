@@ -26,6 +26,7 @@ import { ProductStatus } from './enum/product.enum.js';
 @Index('idx_products_brand', ['brand_id'])
 @Index('idx_products_price', ['price'])
 @Index('idx_products_sold', ['sold_count'])
+@Index('idx_products_search_gin', { synchronize: false })
 @Check(
   'chk_products_status',
   `"status" IN ('${ProductStatus.DRAFT}', '${ProductStatus.PENDING}', '${ProductStatus.ACTIVE}', '${ProductStatus.HIDDEN}', '${ProductStatus.REJECTED}')`,

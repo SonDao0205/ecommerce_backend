@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   OneToMany,
   OneToOne,
@@ -14,6 +15,7 @@ import { ShopStatus } from './enum/shop.enum.js';
 import { ShopFollower } from './shop_follower.entity.js';
 
 @Entity({ name: 'shops' })
+@Index('idx_shops_search_gin', { synchronize: false })
 export class Shop {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;

@@ -17,6 +17,7 @@ import { CartModule } from './cart/cart.module.js';
 import { OrderModule } from './order/order.module.js';
 import { ShippingModule } from './shipping/shipping.module.js';
 import { PaymentModule } from './payment/payment.module.js';
+import { CatalogModule } from './catalog/catalog.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -54,6 +55,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     OrderModule,
     ShippingModule,
     PaymentModule,
+    CatalogModule,
   ],
   controllers: [AppController],
   providers: [AppService],
