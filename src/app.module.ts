@@ -15,6 +15,8 @@ import { CategoryModule } from './category/category.module.js';
 import { ProductModule } from './product/product.module.js';
 import { CartModule } from './cart/cart.module.js';
 import { OrderModule } from './order/order.module.js';
+import { ShippingModule } from './shipping/shipping.module.js';
+import { PaymentModule } from './payment/payment.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -50,6 +52,8 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     ProductModule,
     CartModule,
     OrderModule,
+    ShippingModule,
+    PaymentModule,
   ],
   controllers: [AppController],
   providers: [AppService],

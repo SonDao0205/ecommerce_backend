@@ -52,9 +52,9 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 ## 3. Quản trị hệ thống (Admin)
 
 - [ ] **Quản lý người dùng:** khách hàng, seller, khóa/mở tài khoản
-- [ ] **Phân quyền (RBAC):** super admin, nhân viên, CSKH...
-- [ ] **Duyệt shop** và duyệt sản phẩm (nếu cần)
-- [ ] **Quản lý danh mục, thương hiệu, thuộc tính** sản phẩm dùng chung
+- [ x ] **Phân quyền (RBAC):** super admin, nhân viên, CSKH...
+- [ x ] **Duyệt shop** và duyệt sản phẩm (nếu cần)
+- [ x ] **Quản lý danh mục, thương hiệu, thuộc tính** sản phẩm dùng chung
 - [ ] **Quản lý đơn hàng toàn sàn**, xử lý tranh chấp
 - [ ] **Khuyến mãi toàn sàn:** voucher, flash sale, banner, chiến dịch
 - [ ] **Tài chính:** cấu hình % hoa hồng, đối soát, duyệt yêu cầu rút tiền của shop
