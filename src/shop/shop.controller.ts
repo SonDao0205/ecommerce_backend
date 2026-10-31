@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   HttpStatus,
   Param,
   Patch,
@@ -30,6 +31,18 @@ const MAX_SHOP_IMAGE_SIZE = 5 * 1024 * 1024;
 @Controller('api/v1/shop')
 export class ShopController {
   constructor(private readonly shopService: ShopService) {}
+
+  /** Hồ sơ shop công khai cho client: mô tả, ảnh, liên hệ, trạng thái và số người theo dõi. */
+  @Get(':shop_id')
+  async getShopDetail(@Param('shop_id') shop_id: string) {
+    const shop = await this.shopService.getPublicShopDetail(shop_id);
+    return new ApiResponseData<ShopResponse>(
+      true,
+      'Lấy thông tin shop thành công!',
+      new ShopResponse(shop),
+      HttpStatus.OK,
+    );
+  }
 
   @Roles(UserRole.SELLER)
   @UseGuards(AuthGuard, EmailVerifiedGuard, RolesGuard)
@@ -125,7 +138,8 @@ export class ShopController {
     );
   }
 
-  @UseGuards(AuthGuard, EmailVerifiedGuard)
+  @Roles(UserRole.CLIENT)
+  @UseGuards(AuthGuard, EmailVerifiedGuard, RolesGuard)
   @Post('/follow/:shop_id')
   async followShop(@Req() req: Request, @Param(`shop_id`) shop_id: string) {
     const userId = (req as any).user?.id as string;
@@ -137,7 +151,7 @@ export class ShopController {
         ? `Đã theo dõi shop thành công!`
         : `Đã huỷ theo dõi shop thành công!`,
       followedShop,
-      201,
+      followedShop ? HttpStatus.CREATED : HttpStatus.OK,
     );
   }
 }

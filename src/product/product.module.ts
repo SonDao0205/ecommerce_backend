@@ -8,7 +8,6 @@ import { ProductImage } from './entities/product_image.entity.js';
 import { ProductVariant } from './entities/product_variant.entity.js';
 import { VariantAttributeValue } from './entities/variant_attribute_value.entity.js';
 import { Brand } from './entities/brand.entity.js';
-import { Shop } from '../shop/entities/shop.entity.js';
 import { Categories } from '../category/entities/categories.entity.js';
 import { AttributeValues } from '../category/entities/attribute_values.entity.js';
 import { ShopModule } from '../shop/shop.module.js';
@@ -28,7 +27,6 @@ import { UserModule } from '../user/user.module.js';
       ProductVariant,
       VariantAttributeValue,
       Brand,
-      Shop,
       Categories,
       AttributeValues,
     ]),

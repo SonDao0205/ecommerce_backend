@@ -2,10 +2,12 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   HttpStatus,
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UploadedFiles,
   UseGuards,
@@ -16,6 +18,7 @@ import type { Request } from 'express';
 import { ProductService } from './product.service.js';
 import { CreateProductDto } from './dto/create-product.dto.js';
 import { UpdateProductDto } from './dto/update-product.dto.js';
+import { ListShopProductsQueryDto } from './dto/list-shop-products-query.dto.js';
 import { ApiResponseData } from '../dto/response.js';
 import { AuthGuard } from '../middleware/guard/auth.guard.js';
 import { EmailVerifiedGuard } from '../middleware/guard/email-verified.guard.js';
@@ -42,6 +45,36 @@ type ProductImageFiles = {
 @Controller('api/v1/products')
 export class ProductController {
   constructor(private readonly productService: ProductService) {}
+
+  /**
+   * Chi tiết công khai cho client: category, shop, gallery, brand và
+   * biến thể kèm thuộc tính (size/màu) cùng tồn kho.
+   */
+  @Get(':productId')
+  async getProductDetail(@Param('productId') productId: string) {
+    const product = await this.productService.getProductDetail(productId);
+    return new ApiResponseData(
+      true,
+      'Lấy chi tiết sản phẩm thành công!',
+      product,
+      HttpStatus.OK,
+    );
+  }
+
+  /** Danh sách sản phẩm đang bán của shop, có phân trang cho client. */
+  @Get('shop/:shopId')
+  async getShopProducts(
+    @Param('shopId') shopId: string,
+    @Query() query: ListShopProductsQueryDto,
+  ) {
+    const result = await this.productService.getShopProducts(shopId, query);
+    return new ApiResponseData(
+      true,
+      'Lấy danh sách sản phẩm của shop thành công!',
+      result,
+      HttpStatus.OK,
+    );
+  }
 
   @Roles(UserRole.SELLER)
   @UseGuards(AuthGuard, EmailVerifiedGuard, RolesGuard)

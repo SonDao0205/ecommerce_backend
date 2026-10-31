@@ -14,7 +14,7 @@ Hệ thống ecommerce dạng **marketplace** (nhiều shop), gồm 3 phân hệ
 ### Duyệt & tìm sản phẩm
 
 - [ ] Trang chủ (banner, danh mục nổi bật, flash sale, gợi ý)
-- [ ] Danh mục sản phẩm, tìm kiếm, lọc (giá, thương hiệu, đánh giá, shop), sắp xếp
+- [ x ] Danh mục sản phẩm, tìm kiếm, lọc (giá, thương hiệu, đánh giá, shop), sắp xếp
 - [ ] Trang chi tiết sản phẩm (ảnh, mô tả, biến thể size/màu, tồn kho, đánh giá)
 - [ ] Trang shop (xem sản phẩm của từng shop, theo dõi shop)
 

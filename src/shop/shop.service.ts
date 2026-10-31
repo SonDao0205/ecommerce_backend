@@ -7,8 +7,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Shop } from './entities/shop.entity.js';
-import { Repository } from 'typeorm';
 import { ShopFollower } from './entities/shop_follower.entity.js';
 import { CreateShopDto } from './dto/create-shop.dto.js';
 import { UpdateShopDto } from './dto/update-shop.dto.js';
@@ -28,8 +28,7 @@ import type {
 export class ShopService {
   constructor(
     @InjectRepository(Shop) private readonly shopRepository: Repository<Shop>,
-    @InjectRepository(ShopFollower)
-    private readonly shopFollowerRepository: Repository<ShopFollower>,
+    private readonly dataSource: DataSource,
     @Inject() private readonly userService: UserService,
     @Inject() private readonly cloudinaryService: CloudinaryService,
   ) {}
@@ -38,6 +37,39 @@ export class ShopService {
     return await this.shopRepository.findOne({
       where: { id: shopId },
     });
+  };
+
+  /** Trả shop đang hoạt động của seller cho ProductModule qua service boundary. */
+  getActiveShopByOwnerId = async (userId: string): Promise<Shop> => {
+    const shop = await this.shopRepository.findOne({
+      where: { user: { id: userId } },
+      relations: { user: true },
+    });
+
+    if (!shop) {
+      throw new NotFoundException('Không tìm thấy shop của seller.');
+    }
+    if (shop.status !== ShopStatus.ACTIVE) {
+      throw new ForbiddenException(
+        'Shop cần được admin duyệt trước khi đăng sản phẩm.',
+      );
+    }
+    return shop;
+  };
+
+  /** Chỉ công khai hồ sơ của shop đã được duyệt và đang hoạt động. */
+  getPublicShopDetail = async (shopId: string): Promise<Shop> => {
+    if (!/^\d+$/.test(shopId)) {
+      throw new BadRequestException('ID shop không hợp lệ.');
+    }
+
+    const shop = await this.shopRepository.findOne({
+      where: { id: shopId, status: ShopStatus.ACTIVE },
+    });
+    if (!shop) {
+      throw new NotFoundException('Không tìm thấy shop đang hoạt động.');
+    }
+    return shop;
   };
 
   createShop = async (
@@ -187,33 +219,36 @@ export class ShopService {
   };
 
   followShop = async (userId: string, shopId: string): Promise<boolean> => {
-    const shop = await this.findById(shopId);
-
-    if (!shop) {
-      throw new NotFoundException('Không tìm thấy Shop hợp lệ!');
+    if (!/^\d+$/.test(shopId)) {
+      throw new BadRequestException('ID shop không hợp lệ.');
     }
 
-    if (shop.status !== ShopStatus.ACTIVE)
-      throw new BadRequestException(`Shop chưa được phê duyệt!`);
+    return this.dataSource.transaction(async (manager) => {
+      const shops = manager.getRepository(Shop);
+      const followers = manager.getRepository(ShopFollower);
+      const shop = await shops.findOne({
+        where: { id: shopId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!shop) throw new NotFoundException('Không tìm thấy shop hợp lệ.');
+      if (shop.status !== ShopStatus.ACTIVE) {
+        throw new BadRequestException('Shop chưa được phê duyệt.');
+      }
 
-    const shopFollower = await this.shopFollowerRepository.findOne({
-      where: {
-        shop: { id: shopId },
-        user: { id: userId },
-      },
+      const existingFollow = await followers.findOne({
+        where: { shop_id: shopId, user_id: userId },
+      });
+      if (existingFollow) {
+        await followers.remove(existingFollow);
+        await shops.decrement({ id: shopId }, 'follower_count', 1);
+        return false;
+      }
+
+      await followers.save(
+        followers.create({ shop_id: shopId, user_id: userId }),
+      );
+      await shops.increment({ id: shopId }, 'follower_count', 1);
+      return true;
     });
-
-    if (shopFollower) {
-      await this.shopFollowerRepository.remove(shopFollower);
-      return false;
-    }
-
-    const newShopFollower = this.shopFollowerRepository.create({
-      shop_id: shopId,
-      user_id: userId,
-    });
-
-    await this.shopFollowerRepository.save(newShopFollower);
-    return true;
   };
 }

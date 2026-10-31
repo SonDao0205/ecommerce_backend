@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Shop } from '../shop/entities/shop.entity.js';
-import { ShopStatus } from '../shop/entities/enum/shop.enum.js';
+import { ShopService } from '../shop/shop.service.js';
 import { Categories } from '../category/entities/categories.entity.js';
 import {
   CloudinaryImageKey,
@@ -23,8 +23,12 @@ import { Product } from './entities/product.entity.js';
 import { ProductImage } from './entities/product_image.entity.js';
 import { CreateProductDto } from './dto/create-product.dto.js';
 import { UpdateProductDto } from './dto/update-product.dto.js';
-import { ProductStatus } from './entities/enum/product.enum.js';
+import {
+  ProductStatus,
+  ProductVariantStatus,
+} from './entities/enum/product.enum.js';
 import { ProductVariantService } from './product-variant.service.js';
+import { ListShopProductsQueryDto } from './dto/list-shop-products-query.dto.js';
 
 type ProductUploadFiles = {
   thumbnail?: UploadImageFile;
@@ -45,8 +49,6 @@ export class ProductService {
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
-    @InjectRepository(Shop)
-    private readonly shopRepository: Repository<Shop>,
     @InjectRepository(Categories)
     private readonly categoriesRepository: Repository<Categories>,
     @InjectRepository(Brand)
@@ -54,6 +56,7 @@ export class ProductService {
     private readonly dataSource: DataSource,
     private readonly cloudinaryService: CloudinaryService,
     private readonly productVariantService: ProductVariantService,
+    private readonly shopService: ShopService,
   ) {}
 
   /** Đọc một sản phẩm cùng ảnh và biến thể để AdminService xử lý duyệt. */
@@ -62,6 +65,86 @@ export class ProductService {
       where: { id: productId },
       relations: { images: true, variants: true },
     });
+  };
+
+  /**
+   * Đọc trang chi tiết công khai và join category, shop, brand, gallery,
+   * variants cùng attribute values/attributes để client hiển thị size/màu
+   * và tồn kho.
+   * Sản phẩm hoặc shop chưa hoạt động sẽ không được công khai.
+   */
+  getProductDetail = async (productId: string): Promise<Product> => {
+    if (!/^\d+$/.test(productId)) {
+      throw new BadRequestException('ID sản phẩm không hợp lệ.');
+    }
+
+    const product = await this.productRepository
+      .createQueryBuilder('product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
+      .leftJoinAndSelect('product.images', 'image')
+      .leftJoinAndSelect(
+        'product.variants',
+        'variant',
+        'variant.status = :variantStatus',
+        { variantStatus: ProductVariantStatus.ACTIVE },
+      )
+      .leftJoinAndSelect('variant.attribute_values', 'variantAttributeValue')
+      .leftJoinAndSelect(
+        'variantAttributeValue.attribute_value',
+        'attributeValue',
+      )
+      .leftJoinAndSelect('attributeValue.attribute', 'attribute')
+      .where('product.id = :productId', { productId })
+      .andWhere('product.status = :productStatus', {
+        productStatus: ProductStatus.ACTIVE,
+      })
+      .andWhere('product.is_deleted = :isDeleted', { isDeleted: 0 })
+      .orderBy('image.sort_order', 'ASC')
+      .addOrderBy('variant.id', 'ASC')
+      .addOrderBy('attribute.id', 'ASC')
+      .getOne();
+
+    if (!product) {
+      throw new NotFoundException('Không tìm thấy sản phẩm đang kinh doanh.');
+    }
+
+    // Lấy shop qua ShopService để ProductModule không truy cập ShopRepository.
+    product.shop = await this.shopService.getPublicShopDetail(product.shop_id);
+    return product;
+  };
+
+  /** Lấy sản phẩm công khai theo shop, trả category và metadata phân trang. */
+  getShopProducts = async (
+    shopId: string,
+    query: ListShopProductsQueryDto,
+  ) => {
+    await this.shopService.getPublicShopDetail(shopId);
+
+    const [items, total] = await this.productRepository
+      .createQueryBuilder('product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
+      .where('product.shop_id = :shopId', { shopId })
+      .andWhere('product.status = :productStatus', {
+        productStatus: ProductStatus.ACTIVE,
+      })
+      .andWhere('product.is_deleted = :isDeleted', { isDeleted: 0 })
+      .orderBy('product.created_at', 'DESC')
+      .addOrderBy('product.id', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getManyAndCount();
+
+    return {
+      items,
+      meta: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        total_pages: Math.ceil(total / query.limit),
+      },
+    };
   };
 
   /** Lưu thay đổi của sản phẩm đã được AdminService quyết định. */
@@ -273,17 +356,7 @@ export class ProductService {
 
   /** Lấy shop của seller và yêu cầu shop đã được admin duyệt. */
   private async getActiveSellerShop(userId: string): Promise<Shop> {
-    const shop = await this.shopRepository.findOne({
-      where: { user: { id: userId } },
-      relations: { user: true },
-    });
-    if (!shop) throw new NotFoundException('Không tìm thấy shop của seller.');
-    if (shop.status !== ShopStatus.ACTIVE) {
-      throw new ForbiddenException(
-        'Shop cần được admin duyệt trước khi đăng sản phẩm.',
-      );
-    }
-    return shop;
+    return this.shopService.getActiveShopByOwnerId(userId);
   }
 
   /** Chỉ cho phép gắn sản phẩm vào danh mục đang hoạt động. */
