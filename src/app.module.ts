@@ -18,6 +18,7 @@ import { OrderModule } from './order/order.module.js';
 import { ShippingModule } from './shipping/shipping.module.js';
 import { PaymentModule } from './payment/payment.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
+import { VoucherModule } from './voucher/voucher.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -56,6 +57,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     ShippingModule,
     PaymentModule,
     CatalogModule,
+    VoucherModule,
   ],
   controllers: [AppController],
   providers: [AppService],
