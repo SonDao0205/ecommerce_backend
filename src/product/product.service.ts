@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Shop } from '../shop/entities/shop.entity.js';
+import { ShopStatus } from '../shop/entities/enum/shop.enum.js';
 import { ShopService } from '../shop/shop.service.js';
 import { Categories } from '../category/entities/categories.entity.js';
 import {
@@ -29,6 +30,7 @@ import {
 } from './entities/enum/product.enum.js';
 import { ProductVariantService } from './product-variant.service.js';
 import { ListShopProductsQueryDto } from './dto/list-shop-products-query.dto.js';
+import type { ProductSearchOptions } from './dto/product-search-options.js';
 
 type ProductUploadFiles = {
   thumbnail?: UploadImageFile;
@@ -65,6 +67,75 @@ export class ProductService {
       where: { id: productId },
       relations: { images: true, variants: true },
     });
+  };
+
+  /**
+   * Search catalog products with full-text matching, category/shop filters,
+   * price sorting, and pagination. All product search queries live here so
+   * CatalogService does not access the product repository directly.
+   * `plainto_tsquery` treats terms as AND without requiring adjacency/order,
+   * so `iphone pro max` matches `iPhone 15 Pro Max`.
+   */
+  searchProducts = async (query: ProductSearchOptions) => {
+    const queryBuilder = this.productRepository
+      .createQueryBuilder('product')
+      .innerJoinAndSelect('product.shop', 'shop')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
+      .where('product.status = :productStatus', {
+        productStatus: ProductStatus.ACTIVE,
+      })
+      .andWhere('product.is_deleted = :isDeleted', { isDeleted: 0 })
+      .andWhere('shop.status = :shopStatus', { shopStatus: ShopStatus.ACTIVE });
+
+    if (query.search) {
+      // Keep this expression identical to the products GIN index expression.
+      const document = `to_tsvector('simple', coalesce(product.name, '') || ' ' || coalesce(product.description, ''))`;
+      const searchQuery = `plainto_tsquery('simple', :search)`;
+      queryBuilder
+        .andWhere(`${document} @@ ${searchQuery}`, { search: query.search })
+        .addSelect(`ts_rank(${document}, ${searchQuery})`, 'search_rank');
+    }
+
+    if (query.category_id) {
+      queryBuilder.andWhere('product.category_id = :categoryId', {
+        categoryId: query.category_id,
+      });
+    }
+    if (query.shop_id) {
+      queryBuilder.andWhere('product.shop_id = :shopId', {
+        shopId: query.shop_id,
+      });
+    }
+
+    switch (query.sort_by) {
+      case 'price_asc':
+        queryBuilder.orderBy('product.price', 'ASC');
+        break;
+      case 'price_desc':
+        queryBuilder.orderBy('product.price', 'DESC');
+        break;
+      default:
+        if (query.search) queryBuilder.orderBy('search_rank', 'DESC');
+        else queryBuilder.orderBy('product.created_at', 'DESC');
+    }
+
+    queryBuilder
+      .addOrderBy('product.created_at', 'DESC')
+      .addOrderBy('product.id', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit);
+
+    const [items, total] = await queryBuilder.getManyAndCount();
+    return {
+      items,
+      meta: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        total_pages: Math.ceil(total / query.limit),
+      },
+    };
   };
 
   /**
@@ -115,10 +186,7 @@ export class ProductService {
   };
 
   /** Lấy sản phẩm công khai theo shop, trả category và metadata phân trang. */
-  getShopProducts = async (
-    shopId: string,
-    query: ListShopProductsQueryDto,
-  ) => {
+  getShopProducts = async (shopId: string, query: ListShopProductsQueryDto) => {
     await this.shopService.getPublicShopDetail(shopId);
 
     const [items, total] = await this.productRepository
