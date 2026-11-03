@@ -199,7 +199,17 @@ export class VoucherService {
     }
 
     const voucher = this.voucherRepository.create({
-      ...dto,
+      scope: dto.scope,
+      title: dto.title,
+      description: dto.description,
+      discount_type: dto.discount_type,
+      discount_value: dto.discount_value,
+      max_discount_amount: dto.max_discount_amount,
+      min_order_value: dto.min_order_value,
+      usage_limit: dto.usage_limit,
+      usage_per_user: dto.usage_per_user,
+      start_at: dto.start_at,
+      end_at: dto.end_at,
       code,
       shop_id: shopId,
       created_by: actor.id,

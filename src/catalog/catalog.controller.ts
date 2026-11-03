@@ -16,8 +16,9 @@ export class CatalogController {
    * Kỳ vọng: sản phẩm ACTIVE, chưa xóa, thuộc category 12 và shop 4;
    * "iPhone 15 Pro Max" vẫn khớp vì search yêu cầu đủ token nhưng không yêu cầu
    * liền nhau hoặc theo đúng vị trí. Kết quả xếp giá tăng dần, tối đa 20 sản phẩm.
-   * Mock kết quả rút gọn: { items: [{ id: "101", name: "iPhone 15 Pro Max",
-   * price: "29000000" }], meta: { page: 1, limit: 20, total: 1, total_pages: 1 } }.
+   * Mock kết quả: { items: [{ id: "101", name: "iPhone 15 Pro Max",
+   * price: "29000000.00", sold_count: 24, image_url: "https://.../main.jpg",
+   * shop_name: "Phone Shop" }], meta: { page: 1, limit: 20, total: 1, total_pages: 1 } }.
    */
   @Get()
   async getProducts(@Query() query: CatalogProductQueryDto) {

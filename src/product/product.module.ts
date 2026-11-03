@@ -14,6 +14,7 @@ import { ShopModule } from '../shop/shop.module.js';
 import { CategoryModule } from '../category/category.module.js';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module.js';
 import { UserModule } from '../user/user.module.js';
+import { ElasticModule } from '../elastic/elastic.module.js';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { UserModule } from '../user/user.module.js';
     CategoryModule,
     CloudinaryModule,
     UserModule,
+    ElasticModule,
     TypeOrmModule.forFeature([
       Product,
       ProductImage,

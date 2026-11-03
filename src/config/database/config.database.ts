@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { AddCatalogFullTextGinIndexes1793360000000 } from './migrations/1793360000000-add-catalog-full-text-gin-indexes.js';
+import { AddProductSearchOutbox1793370000000 } from './migrations/1793370000000-add-product-search-outbox.js';
 
 export const databaseConfig = (
   config: ConfigService,
@@ -12,7 +13,10 @@ export const databaseConfig = (
   password: config.get<string>('DB_PASSWORD', 'password'),
   database: config.get<string>('DB_DATABASE', 'mydb'),
   autoLoadEntities: true,
-  migrations: [AddCatalogFullTextGinIndexes1793360000000],
+  migrations: [
+    AddCatalogFullTextGinIndexes1793360000000,
+    AddProductSearchOutbox1793370000000,
+  ],
   migrationsRun: true,
   synchronize: true,
 });

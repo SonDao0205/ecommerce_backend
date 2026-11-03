@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -31,6 +32,8 @@ import {
 import { ProductVariantService } from './product-variant.service.js';
 import { ListShopProductsQueryDto } from './dto/list-shop-products-query.dto.js';
 import type { ProductSearchOptions } from './dto/product-search-options.js';
+import { ElasticProductSearchService } from '../elastic/elastic-product-search.service.js';
+import { ProductSearchSyncService } from '../elastic/product-search-sync.service.js';
 
 type ProductUploadFiles = {
   thumbnail?: UploadImageFile;
@@ -48,6 +51,7 @@ type ProductVariantImageInput = { image_file_index?: number };
 
 @Injectable()
 export class ProductService {
+  private readonly logger = new Logger(ProductService.name);
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
@@ -59,6 +63,8 @@ export class ProductService {
     private readonly cloudinaryService: CloudinaryService,
     private readonly productVariantService: ProductVariantService,
     private readonly shopService: ShopService,
+    private readonly elasticSearch: ElasticProductSearchService,
+    private readonly productSearchSync: ProductSearchSyncService,
   ) {}
 
   /** Đọc một sản phẩm cùng ảnh và biến thể để AdminService xử lý duyệt. */
@@ -77,9 +83,21 @@ export class ProductService {
    * so `iphone pro max` matches `iPhone 15 Pro Max`.
    */
   searchProducts = async (query: ProductSearchOptions) => {
+    try {
+      return await this.elasticSearch.searchProducts(query);
+    } catch (error) {
+      this.logger.warn(
+        `Elasticsearch search unavailable; using PostgreSQL fallback: ${(error as Error).message}`,
+      );
+    }
     const queryBuilder = this.productRepository
       .createQueryBuilder('product')
       .innerJoinAndSelect('product.shop', 'shop')
+      .leftJoinAndSelect(
+        'product.images',
+        'primaryImage',
+        'primaryImage.sort_order = 0',
+      )
       .leftJoinAndSelect('product.category', 'category')
       .leftJoinAndSelect('product.brand', 'brand')
       .where('product.status = :productStatus', {
@@ -128,7 +146,14 @@ export class ProductService {
 
     const [items, total] = await queryBuilder.getManyAndCount();
     return {
-      items,
+      items: items.map((product) => ({
+        id: product.id,
+        name: product.name,
+        price: product.price,
+        sold_count: product.sold_count,
+        image_url: product.images?.[0]?.url ?? null,
+        shop_name: product.shop.name,
+      })),
       meta: {
         page: query.page,
         limit: query.limit,
@@ -217,7 +242,13 @@ export class ProductService {
 
   /** Lưu thay đổi của sản phẩm đã được AdminService quyết định. */
   saveProduct = async (product: Product): Promise<Product> => {
-    return this.productRepository.save(product);
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const result = await manager.getRepository(Product).save(product);
+      await this.productSearchSync.enqueueProductChanged(manager, result.id);
+      return result;
+    });
+    await this.productSearchSync.syncAfterCommit(saved.id);
+    return saved;
   };
 
   /**
@@ -247,7 +278,7 @@ export class ProductService {
         uploaded,
       );
 
-      return await this.dataSource.transaction(async (manager) => {
+      const created = await this.dataSource.transaction(async (manager) => {
         const products = manager.getRepository(Product);
         const product = await products.save(
           products.create({
@@ -276,9 +307,12 @@ export class ProductService {
           dto.variants ?? [],
           images.variantImages,
         );
+        await this.productSearchSync.enqueueProductChanged(manager, product.id);
 
         return this.loadProduct(manager, product.id);
       });
+      if (created) await this.productSearchSync.syncAfterCommit(created.id);
+      return created;
     } catch (error) {
       await this.cleanupUploads(uploaded);
       this.rethrowConstraintError(error);
@@ -323,7 +357,13 @@ export class ProductService {
       }
 
       product.status = dto.status;
-      return this.productRepository.save(product);
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const result = await manager.getRepository(Product).save(product);
+        await this.productSearchSync.enqueueProductChanged(manager, result.id);
+        return result;
+      });
+      await this.productSearchSync.syncAfterCommit(saved.id);
+      return saved;
     }
 
     if (product.status !== ProductStatus.DRAFT) {
@@ -375,7 +415,7 @@ export class ProductService {
         uploaded,
       );
 
-      return await this.dataSource.transaction(async (manager) => {
+      const updated = await this.dataSource.transaction(async (manager) => {
         const products = manager.getRepository(Product);
 
         if (dto.name !== undefined) product.name = dto.name.trim();
@@ -413,13 +453,37 @@ export class ProductService {
           dto.variants ?? [],
           images.variantImages,
         );
+        await this.productSearchSync.enqueueProductChanged(manager, product.id);
 
         return this.loadProduct(manager, product.id);
       });
+      if (updated) await this.productSearchSync.syncAfterCommit(updated.id);
+      return updated;
     } catch (error) {
       await this.cleanupUploads(uploaded);
       this.rethrowConstraintError(error);
     }
+  };
+
+  /** Xóa mềm sản phẩm của seller và đưa sự kiện xóa khỏi chỉ mục vào outbox. */
+  softDelete = async (userId: string, productId: string): Promise<void> => {
+    const shop = await this.getActiveSellerShop(userId);
+    const product = await this.getOwnedProduct(productId, shop.id);
+    await this.dataSource.transaction(async (manager) => {
+      await manager
+        .getRepository(Product)
+        .update({ id: product.id }, { is_deleted: 1 });
+      await this.productSearchSync.enqueueProductChanged(manager, product.id);
+    });
+    await this.productSearchSync.syncAfterCommit(product.id);
+  };
+
+  /** OrderService gọi sau khi sold_count được commit để làm mới tài liệu tìm kiếm. */
+  refreshSearchDocument = async (productId: string): Promise<void> => {
+    await this.dataSource.transaction(async (manager) => {
+      await this.productSearchSync.enqueueProductChanged(manager, productId);
+    });
+    await this.productSearchSync.syncAfterCommit(productId);
   };
 
   /** Lấy shop của seller và yêu cầu shop đã được admin duyệt. */
@@ -542,11 +606,16 @@ export class ProductService {
       const existingImages = await repository.find({
         where: { product_id: product.id },
         order: { sort_order: 'DESC' },
-        take: 1,
       });
-      sortOrder = existingImages[0]?.sort_order + 1 || 0;
       if (hasNewThumbnail) {
-        await repository.update({ product_id: product.id }, { is_primary: 0 });
+        for (const existingImage of existingImages) {
+          existingImage.sort_order += 1;
+          existingImage.is_primary = 0;
+        }
+        await repository.save(existingImages);
+        sortOrder = 0;
+      } else {
+        sortOrder = (existingImages[0]?.sort_order ?? -1) + 1;
       }
     }
 

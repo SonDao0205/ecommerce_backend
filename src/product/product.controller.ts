@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpStatus,
   Param,
@@ -24,9 +25,7 @@ import { AuthGuard } from '../middleware/guard/auth.guard.js';
 import { EmailVerifiedGuard } from '../middleware/guard/email-verified.guard.js';
 import { Roles, RolesGuard } from '../middleware/guard/roles.guard.js';
 import { UserRole } from '../user/entities/enums/user.enum.js';
-import {
-  isAllowedImageMimeType,
-} from '../cloudinary/cloudinary.service.js';
+import { isAllowedImageMimeType } from '../cloudinary/cloudinary.service.js';
 import type { UploadImageFile } from '../cloudinary/cloudinary.service.js';
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -151,6 +150,20 @@ export class ProductController {
       true,
       'Cập nhật sản phẩm thành công!',
       product,
+      HttpStatus.OK,
+    );
+  }
+
+  @Roles(UserRole.SELLER)
+  @UseGuards(AuthGuard, EmailVerifiedGuard, RolesGuard)
+  @Delete(':productId')
+  async delete(@Req() request: Request, @Param('productId') productId: string) {
+    const userId = (request as any).user?.id as string;
+    await this.productService.softDelete(userId, productId);
+    return new ApiResponseData(
+      true,
+      'Xóa sản phẩm thành công!',
+      null,
       HttpStatus.OK,
     );
   }

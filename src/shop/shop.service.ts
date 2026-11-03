@@ -23,6 +23,7 @@ import type {
   CloudinaryUploadResult,
   UploadImageFile,
 } from '../cloudinary/cloudinary.service.js';
+import { ProductSearchSyncService } from '../elastic/product-search-sync.service.js';
 
 @Injectable()
 export class ShopService {
@@ -31,6 +32,7 @@ export class ShopService {
     private readonly dataSource: DataSource,
     @Inject() private readonly userService: UserService,
     @Inject() private readonly cloudinaryService: CloudinaryService,
+    private readonly productSearchSync: ProductSearchSyncService,
   ) {}
 
   findById = async (shopId: string) => {
@@ -204,7 +206,21 @@ export class ShopService {
         updates.banner_url = uploadedBanner.secure_url;
       }
 
-      return await this.shopRepository.save(Object.assign(shop, updates));
+      const nameChanged =
+        updates.name !== undefined && updates.name !== shop.name;
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const result = await manager
+          .getRepository(Shop)
+          .save(Object.assign(shop, updates));
+        if (nameChanged) {
+          await this.productSearchSync.enqueueShopProductsChanged(
+            manager,
+            result.id,
+          );
+        }
+        return result;
+      });
+      return saved;
     } catch (error) {
       const uploadedImages = [uploadedLogo, uploadedBanner].filter(
         (image): image is CloudinaryUploadResult => image !== undefined,

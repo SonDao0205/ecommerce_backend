@@ -7,11 +7,13 @@ import { ShopFollower } from './entities/shop_follower.entity.js';
 import { User } from '../user/entities/user.entity.js';
 import { UserModule } from '../user/user.module.js';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module.js';
+import { ElasticModule } from '../elastic/elastic.module.js';
 
 @Module({
   imports: [
     UserModule,
     CloudinaryModule,
+    ElasticModule,
     TypeOrmModule.forFeature([Shop, ShopFollower, User]),
   ],
   controllers: [ShopController],
