@@ -22,6 +22,9 @@ import { OrderPaymentStatus, OrderStatus } from './enum/order.enum.js';
 @Unique('uq_orders_order_number', ['order_number'])
 @Index('idx_orders_user_created', ['user_id', 'created_at'])
 @Index('idx_orders_address', ['address_id'])
+@Index('uq_orders_user_idempotency_key', ['user_id', 'idempotency_key'], {
+  unique: true,
+})
 @Check(
   'chk_orders_status',
   `"status" IN ('${OrderStatus.PENDING}', '${OrderStatus.CONFIRMED}', '${OrderStatus.COMPLETED}', '${OrderStatus.CANCELLED}', '${OrderStatus.REFUNDED}')`,
@@ -48,6 +51,22 @@ export class Order {
 
   @Column({ name: 'user_id', type: 'bigint', nullable: false })
   user_id: string;
+
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  idempotency_key: string | null;
+
+  @Column({
+    name: 'request_hash',
+    type: 'char',
+    length: 64,
+    nullable: true,
+  })
+  request_hash: string | null;
 
   @ManyToOne(() => User, { nullable: false, onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'user_id', foreignKeyConstraintName: 'fk_orders_user' })

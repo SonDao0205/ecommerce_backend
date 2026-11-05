@@ -41,7 +41,7 @@ export class ProductVariantService {
     return variants;
   }
 
-  /** Khóa các variant trong transaction, xác nhận giá và tồn kho hiện tại. */
+  /** Khóa các variant trong transaction, xác nhận trạng thái và giá hiện tại. */
   async lockOrderableVariants(
     manager: EntityManager,
     quantities: Map<string, number>,
@@ -65,13 +65,23 @@ export class ProductVariantService {
           'Giá sản phẩm vừa thay đổi; vui lòng tạo lại đơn hàng.',
         );
       }
-      if (variant.stock < quantities.get(variant.id)!) {
+    }
+    return variants;
+  }
+
+  /** Kiểm tra tồn kho sau khi OrderService tra lại idempotency key trong transaction. */
+  assertOrderQuantitiesAvailable(
+    variants: ProductVariant[],
+    quantities: Map<string, number>,
+  ): void {
+    for (const variant of variants) {
+      const quantity = quantities.get(variant.id)!;
+      if (variant.stock < quantity) {
         throw new BadRequestException(
           `${variant.product.name} không đủ tồn kho; hiện còn ${variant.stock}.`,
         );
       }
     }
-    return variants;
   }
 
   /** Trừ tồn kho cho variant đã khóa trong transaction của order. */

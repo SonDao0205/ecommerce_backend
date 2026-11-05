@@ -1,6 +1,10 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
 import { PaymentService } from '../payment/payment.service.js';
 import { ProductVariantService } from '../product/product-variant.service.js';
@@ -29,7 +33,18 @@ export class OrderService {
   ) {}
 
   /** Tạo order cho một shop; mọi giá tiền đều được tính từ dữ liệu DB. */
-  createOrder = async (user_id: string, input: CreateOrderDto) => {
+  createOrder = async (
+    user_id: string,
+    input: CreateOrderDto,
+    idempotencyKey: string,
+  ) => {
+    const key = this.normalizeIdempotencyKey(idempotencyKey);
+    const requestHash = this.hashOrderRequest(input);
+    const existingOrder = await this.findOrderByIdempotencyKey(user_id, key);
+    if (existingOrder) {
+      return this.resolveIdempotentReplay(existingOrder, requestHash);
+    }
+
     // 1. Kiểm tra payload và xác nhận địa chỉ thuộc đúng user đang đặt hàng.
     if (!input.items?.length) {
       throw new BadRequestException('Đơn hàng phải có ít nhất một sản phẩm.');
@@ -106,58 +121,160 @@ export class OrderService {
 
     // 4. Transaction khóa tồn kho, tạo order và shop_order, trừ kho, rồi tạo
     // order_item. Bất kỳ lỗi nào cũng rollback toàn bộ thay đổi trong transaction.
-    return this.dataSource.transaction(async (manager) => {
-      const lockedVariants =
-        await this.productVariantService.lockOrderableVariants(
-          manager,
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // Order vẫn là repository duy nhất mà OrderService thao tác trực tiếp;
+        // lấy repository từ manager để insert và đọc nằm trong transaction này.
+        const orderRepository = manager.getRepository(Order);
+        const lockedVariants =
+          await this.productVariantService.lockOrderableVariants(
+            manager,
+            quantities,
+            variants,
+          );
+
+        // Nếu request cùng key vừa commit trong lúc request này chờ khóa tồn kho,
+        // trả order đó trước khi kiểm tra lại số lượng hàng còn lại.
+        const committedOrder = await this.findOrderByIdempotencyKey(
+          user_id,
+          key,
+          orderRepository,
+        );
+        if (committedOrder) {
+          return this.resolveIdempotentReplay(committedOrder, requestHash);
+        }
+        this.productVariantService.assertOrderQuantitiesAvailable(
+          lockedVariants,
           quantities,
-          variants,
         );
 
-      const order = await this.orderRepository.save(
-        this.orderRepository.create({
-          order_number: `ORD-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`,
-          user_id,
-          address_id: address.id,
-          payment_method_id: paymentMethod.id,
+        const order = await orderRepository.save(
+          orderRepository.create({
+            order_number: `ORD-${Date.now()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+            user_id,
+            idempotency_key: key,
+            request_hash: requestHash,
+            address_id: address.id,
+            payment_method_id: paymentMethod.id,
+            subtotal,
+            discount_amount: discountAmount,
+            shipping_fee: shippingFee,
+            total_amount: totalAmount,
+            customer_note: input.customer_note?.trim() || null,
+          }),
+        );
+        const shopOrder = await this.shopService.createShopOrder(manager, {
+          order_id: order.id,
+          shop_id: shopId,
+          shipping_method_id: shippingMethod.id,
           subtotal,
           discount_amount: discountAmount,
           shipping_fee: shippingFee,
           total_amount: totalAmount,
-          customer_note: input.customer_note?.trim() || null,
-        }),
-      );
-      const shopOrder = await this.shopService.createShopOrder(manager, {
-        order_id: order.id,
-        shop_id: shopId,
-        shipping_method_id: shippingMethod.id,
-        subtotal,
-        discount_amount: discountAmount,
-        shipping_fee: shippingFee,
-        total_amount: totalAmount,
-      });
+        });
 
-      for (const variant of lockedVariants) {
-        const quantity = quantities.get(variant.id)!;
-        await this.productVariantService.decreaseOrderStock(
+        for (const variant of lockedVariants) {
+          const quantity = quantities.get(variant.id)!;
+          await this.productVariantService.decreaseOrderStock(
+            manager,
+            variant,
+            quantity,
+          );
+        }
+        await this.orderItemService.createItems(
           manager,
-          variant,
-          quantity,
+          shopOrder.id,
+          lockedVariants,
+          quantities,
+          (price, quantity) => this.multiplyMoney(price, quantity),
         );
-      }
-      await this.orderItemService.createItems(
-        manager,
-        shopOrder.id,
-        lockedVariants,
-        quantities,
-        (price, quantity) => this.multiplyMoney(price, quantity),
-      );
-      return this.orderRepository.findOne({
-        where: { id: order.id },
-        relations: { shop_orders: { items: true } },
+        return orderRepository.findOne({
+          where: { id: order.id },
+          relations: { shop_orders: { items: true } },
+        });
       });
-    });
+    } catch (error) {
+      // Unique constraint phân xử request đồng thời. Transaction thua cuộc đã
+      // rollback trước khi tải lại order thắng cuộc bằng key.
+      if (!this.isIdempotencyUniqueViolation(error)) throw error;
+      const committedOrder = await this.findOrderByIdempotencyKey(user_id, key);
+      if (!committedOrder) throw error;
+      return this.resolveIdempotentReplay(committedOrder, requestHash);
+    }
   };
+
+  private normalizeIdempotencyKey(key: string): string {
+    const normalized = key?.trim();
+    if (
+      !normalized ||
+      normalized.length > 128 ||
+      /[\u0000-\u001F\u007F]/.test(normalized)
+    ) {
+      throw new BadRequestException(
+        'Header Idempotency-Key bắt buộc và phải dài tối đa 128 ký tự.',
+      );
+    }
+    return normalized;
+  }
+
+  private hashOrderRequest(input: CreateOrderDto): string {
+    const quantities = new Map<string, number>();
+    for (const item of input?.items ?? []) {
+      const variantId = String(item?.product_variant_id ?? '');
+      quantities.set(
+        variantId,
+        (quantities.get(variantId) ?? 0) + Number(item?.quantity),
+      );
+    }
+    const canonicalRequest = {
+      address_id: String(input?.address_id ?? ''),
+      payment_method_id: String(input?.payment_method_id ?? ''),
+      shipping_method_id: String(input?.shipping_method_id ?? ''),
+      items: [...quantities.entries()].sort(([a], [b]) => a.localeCompare(b)),
+      // Thứ tự voucher được giữ vì VoucherService áp dụng lần lượt theo thứ tự này.
+      voucher_codes: (input?.voucher_codes ?? []).map((code) =>
+        String(code).trim().toUpperCase(),
+      ),
+      customer_note: input?.customer_note?.trim() ?? null,
+    };
+    return createHash('sha256')
+      .update(JSON.stringify(canonicalRequest))
+      .digest('hex');
+  }
+
+  private findOrderByIdempotencyKey(
+    userId: string,
+    key: string,
+    repository: Repository<Order> = this.orderRepository,
+  ) {
+    return repository.findOne({
+      where: { user_id: userId, idempotency_key: key },
+      relations: { shop_orders: { items: true } },
+    });
+  }
+
+  private resolveIdempotentReplay(order: Order, requestHash: string): Order {
+    if (order.request_hash !== requestHash) {
+      throw new ConflictException(
+        'Idempotency-Key này đã được sử dụng với nội dung request khác.',
+      );
+    }
+    return order;
+  }
+
+  private isIdempotencyUniqueViolation(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const databaseError = error as {
+      code?: string;
+      constraint?: string;
+      driverError?: { code?: string; constraint?: string };
+    };
+    const driverError = databaseError.driverError ?? databaseError;
+    return (
+      driverError.code === '23505' &&
+      driverError.constraint === 'uq_orders_user_idempotency_key'
+    );
+  }
 
   /** Apply voucher service is called even when no code was supplied. */
   private calculateOrderPrice = async (
