@@ -1,0 +1,1057 @@
+{
+  "info": {
+    "_postman_id": "ecommerce-api-collection",
+    "name": "Ecommerce API",
+    "description": "Postman collection cho toàn bộ endpoints của dự án Ecommerce NestJS",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "reset_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "description": "Xác thực người dùng – đăng ký, đăng nhập, OTP, đổi mật khẩu, refresh token",
+      "item": [
+        {
+          "name": "Đăng ký tài khoản (CLIENT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "register"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Nguyễn Văn A\",\n  \"email\": \"client@example.com\",\n  \"phone\": \"0912345678\",\n  \"password\": \"StrongPass@123\",\n  \"role\": \"CLIENT\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Đăng ký tài khoản (SELLER)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "register"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Trần Thị B\",\n  \"email\": \"seller@example.com\",\n  \"phone\": \"0987654321\",\n  \"password\": \"StrongPass@123\",\n  \"role\": \"SELLER\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Đăng nhập",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.access_token) {",
+                  "  pm.collectionVariables.set('access_token', res.data.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', res.data.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "login"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"client@example.com\",\n  \"password\": \"StrongPass@123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Lấy thông tin người dùng hiện tại (GET /me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "Gửi OTP quên mật khẩu",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/forgot-password/otp",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "forgot-password", "otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"client@example.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Xác thực OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.reset_token) {",
+                  "  pm.collectionVariables.set('reset_token', res.data.reset_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/forgot-password/verify-otp",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "forgot-password", "verify-otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": \"client@example.com\",\n  \"otp\": \"123456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Đặt lại mật khẩu (dùng reset_token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{reset_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/forgot-password/reset",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "forgot-password", "reset"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newPassword\": \"NewPass@456\",\n  \"confirmPassword\": \"NewPass@456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Đổi mật khẩu (đã đăng nhập)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/change-password",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "change-password"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newPassword\": \"NewPass@456\",\n  \"confirmPassword\": \"NewPass@456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Làm mới token (Refresh Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.access_token) {",
+                  "  pm.collectionVariables.set('access_token', res.data.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', res.data.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/refresh-token",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "refresh-token"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "description": "Quản lý người dùng và địa chỉ",
+      "item": [
+        {
+          "name": "Tạo người dùng (ADMIN only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/user",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "user"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Lê Văn C\",\n  \"email\": \"newuser@example.com\",\n  \"phone\": \"0933445566\",\n  \"password\": \"StrongPass@123\",\n  \"role\": \"CLIENT\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Tạo địa chỉ người dùng",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/user/address",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "user", "address"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"1\",\n  \"recipient_name\": \"Nguyễn Văn A\",\n  \"phone\": \"0912345678\",\n  \"province\": \"Hồ Chí Minh\",\n  \"district\": \"Quận 1\",\n  \"ward\": \"Phường Bến Nghé\",\n  \"street_detail\": \"123 Đường Lê Lợi\",\n  \"is_default\": true\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "Chức năng dành riêng cho Admin",
+      "item": [
+        {
+          "name": "Xác thực tài khoản Seller",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/verify-seller",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "admin", "verify-seller"]
+            }
+          }
+        },
+        {
+          "name": "Duyệt / Từ chối sản phẩm",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/products/:product_id/verify",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "admin", "products", ":product_id", "verify"],
+              "variable": [
+                { "key": "product_id", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ACTIVE\",\n  \"reject_reason\": null\n}"
+            }
+          }
+        },
+        {
+          "name": "Từ chối sản phẩm (REJECTED)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/products/:product_id/verify",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "admin", "products", ":product_id", "verify"],
+              "variable": [
+                { "key": "product_id", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"REJECTED\",\n  \"reject_reason\": \"Sản phẩm không đúng danh mục hoặc vi phạm chính sách.\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Category (Admin)",
+      "description": "Quản lý danh mục sản phẩm – chỉ Admin",
+      "item": [
+        {
+          "name": "Tạo danh mục",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/categories",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "admin", "categories"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Điện thoại\",\n  \"slug\": \"dien-thoai\",\n  \"parent_id\": null,\n  \"image_url\": \"https://example.com/images/dien-thoai.jpg\",\n  \"sort_order\": 1,\n  \"is_active\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "Thiết lập thuộc tính mặc định cho danh mục",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/categories/:categoryId/default-attributes",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "admin", "categories", ":categoryId", "default-attributes"],
+              "variable": [
+                { "key": "categoryId", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"attributes\": [\n    { \"name\": \"Màu sắc\" },\n    { \"name\": \"Dung lượng\" },\n    { \"name\": \"RAM\" }\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Shop",
+      "description": "Quản lý shop – xem công khai, tạo/cập nhật shop (Seller), theo dõi (Client)",
+      "item": [
+        {
+          "name": "Xem thông tin shop công khai",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/shop/:shop_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "shop", ":shop_id"],
+              "variable": [
+                { "key": "shop_id", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Tạo shop (SELLER – multipart/form-data)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/shop",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "shop"]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "name", "value": "Shop Điện Thoại ABC", "type": "text" },
+                { "key": "description", "value": "Chuyên bán điện thoại chính hãng", "type": "text" },
+                { "key": "phone", "value": "0912345678", "type": "text" },
+                { "key": "warehouse_address", "value": "123 Đường ABC, Quận 1, TP.HCM", "type": "text" },
+                { "key": "logo", "value": "", "type": "file", "src": [] },
+                { "key": "banner", "value": "", "type": "file", "src": [] }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cập nhật thông tin shop (SELLER – multipart/form-data)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/shop",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "shop"]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "name", "value": "Shop Điện Thoại ABC (Updated)", "type": "text" },
+                { "key": "description", "value": "Mô tả mới cho shop", "type": "text" },
+                { "key": "phone", "value": "0987654321", "type": "text" },
+                { "key": "logo", "value": "", "type": "file", "src": [] },
+                { "key": "banner", "value": "", "type": "file", "src": [] }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Theo dõi / Huỷ theo dõi shop (CLIENT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/shop/follow/:shop_id",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "shop", "follow", ":shop_id"],
+              "variable": [
+                { "key": "shop_id", "value": "1" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Product",
+      "description": "Quản lý sản phẩm – xem công khai, CRUD cho Seller",
+      "item": [
+        {
+          "name": "Xem chi tiết sản phẩm (công khai)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/products/:productId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "products", ":productId"],
+              "variable": [
+                { "key": "productId", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Lấy danh sách sản phẩm của shop (công khai)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/products/shop/:shopId?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "products", "shop", ":shopId"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ],
+              "variable": [
+                { "key": "shopId", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Tạo sản phẩm (SELLER – multipart/form-data)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/products",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "products"]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "name", "value": "iPhone 15 Pro Max", "type": "text" },
+                { "key": "slug", "value": "iphone-15-pro-max", "type": "text" },
+                { "key": "category_id", "value": "1", "type": "text" },
+                { "key": "brand_id", "value": "1", "type": "text" },
+                { "key": "description", "value": "Điện thoại iPhone 15 Pro Max chính hãng Apple", "type": "text" },
+                { "key": "price", "value": "29000000", "type": "text" },
+                { "key": "status", "value": "PENDING", "type": "text" },
+                {
+                  "key": "variants",
+                  "value": "[{\"sku\":\"IP15PM-256-BT\",\"name\":\"256GB - Đen Titan\",\"price\":\"29000000\",\"stock\":50,\"status\":\"ACTIVE\",\"attributes\":[{\"attribute_id\":\"1\",\"value\":\"Đen Titan\"},{\"attribute_id\":\"2\",\"value\":\"256GB\"}],\"image_file_index\":0}]",
+                  "type": "text"
+                },
+                { "key": "thumbnail", "value": "", "type": "file", "src": [] },
+                { "key": "images", "value": "", "type": "file", "src": [] },
+                { "key": "variant_images", "value": "", "type": "file", "src": [] }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cập nhật sản phẩm (SELLER – multipart/form-data)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/products/:productId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "products", ":productId"],
+              "variable": [
+                { "key": "productId", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "name", "value": "iPhone 15 Pro Max (Updated)", "type": "text" },
+                { "key": "description", "value": "Mô tả mới", "type": "text" },
+                { "key": "price", "value": "28500000", "type": "text" },
+                { "key": "status", "value": "ACTIVE", "type": "text" },
+                {
+                  "key": "variants",
+                  "value": "[{\"id\":\"1\",\"sku\":\"IP15PM-256-BT\",\"price\":\"28500000\",\"stock\":45}]",
+                  "type": "text"
+                },
+                { "key": "thumbnail", "value": "", "type": "file", "src": [] }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Xóa mềm sản phẩm (SELLER)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/products/:productId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "products", ":productId"],
+              "variable": [
+                { "key": "productId", "value": "1" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Catalog",
+      "description": "Tìm kiếm & lọc sản phẩm công khai (full-text search, phân trang, sort)",
+      "item": [
+        {
+          "name": "Lấy danh sách sản phẩm (tất cả)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/catalog/products?page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "catalog", "products"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Tìm kiếm sản phẩm (full-text search)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/catalog/products?search=iphone%20pro%20max&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "catalog", "products"],
+              "query": [
+                { "key": "search", "value": "iphone pro max" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Lọc theo danh mục & shop, sắp xếp theo giá",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/catalog/products?category_id=1&shop_id=1&sort_by=price_asc&page=1&limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "catalog", "products"],
+              "query": [
+                { "key": "category_id", "value": "1" },
+                { "key": "shop_id", "value": "1" },
+                { "key": "sort_by", "value": "price_asc" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Lọc & tìm kiếm kết hợp (đầy đủ params)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/catalog/products?search=iphone&category_id=1&shop_id=1&sort_by=price_desc&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "catalog", "products"],
+              "query": [
+                { "key": "search", "value": "iphone" },
+                { "key": "category_id", "value": "1" },
+                { "key": "shop_id", "value": "1" },
+                { "key": "sort_by", "value": "price_desc" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cart",
+      "description": "Giỏ hàng – yêu cầu đăng nhập (AuthGuard + EmailVerifiedGuard)",
+      "item": [
+        {
+          "name": "Xem giỏ hàng",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/cart",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "cart"]
+            }
+          }
+        },
+        {
+          "name": "Thêm sản phẩm vào giỏ hàng",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/cart/items",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "cart", "items"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"variant_id\": \"1\",\n  \"quantity\": 2\n}"
+            }
+          }
+        },
+        {
+          "name": "Cập nhật số lượng sản phẩm trong giỏ",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/cart/items/:variantId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "cart", "items", ":variantId"],
+              "variable": [
+                { "key": "variantId", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 5\n}"
+            }
+          }
+        },
+        {
+          "name": "Xóa một sản phẩm khỏi giỏ",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/cart/items/:variantId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "cart", "items", ":variantId"],
+              "variable": [
+                { "key": "variantId", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Xóa toàn bộ giỏ hàng",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/cart",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "cart"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Voucher",
+      "description": "Quản lý voucher – tạo/cập nhật (Admin/Seller), áp dụng (Client)",
+      "item": [
+        {
+          "name": "Áp dụng voucher (CLIENT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/vouchers/apply",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vouchers", "apply"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subtotal\": \"500000\",\n  \"voucher_codes\": [\"SALE50\", \"FREESHIP\"],\n  \"shop_id\": \"1\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Tạo voucher (ADMIN / SELLER)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/vouchers",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vouchers"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"SALE50\",\n  \"scope\": \"SHOP\",\n  \"title\": \"Giảm 50K cho đơn từ 200K\",\n  \"description\": \"Áp dụng cho tất cả sản phẩm trong shop\",\n  \"discount_type\": \"FIXED\",\n  \"discount_value\": \"50000\",\n  \"max_discount_amount\": null,\n  \"min_order_value\": \"200000\",\n  \"usage_limit\": 100,\n  \"usage_per_user\": 1,\n  \"start_at\": \"2026-11-01T00:00:00.000Z\",\n  \"end_at\": \"2026-12-31T23:59:59.000Z\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Tạo voucher PERCENT (ADMIN – PLATFORM scope)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/vouchers",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vouchers"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"PLATFORM10\",\n  \"scope\": \"PLATFORM\",\n  \"title\": \"Giảm 10% toàn sàn\",\n  \"discount_type\": \"PERCENT\",\n  \"discount_value\": \"10\",\n  \"max_discount_amount\": \"100000\",\n  \"min_order_value\": \"300000\",\n  \"usage_limit\": 500,\n  \"usage_per_user\": 1,\n  \"start_at\": \"2026-11-01T00:00:00.000Z\",\n  \"end_at\": \"2026-11-30T23:59:59.000Z\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cập nhật voucher (ADMIN / SELLER)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/vouchers/:voucherId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vouchers", ":voucherId"],
+              "variable": [
+                { "key": "voucherId", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Giảm 50K cho đơn từ 300K (Updated)\",\n  \"min_order_value\": \"300000\",\n  \"usage_limit\": 200\n}"
+            }
+          }
+        },
+        {
+          "name": "Kích hoạt / Ngừng kích hoạt voucher (set status)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/vouchers/:voucherId/status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vouchers", ":voucherId", "status"],
+              "variable": [
+                { "key": "voucherId", "value": "1" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_active\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "Xóa / Ngừng kích hoạt vĩnh viễn voucher (ADMIN / SELLER)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/vouchers/:voucherId",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vouchers", ":voucherId"],
+              "variable": [
+                { "key": "voucherId", "value": "1" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payment Methods (Admin)",
+      "description": "Quản lý phương thức thanh toán – chỉ Admin",
+      "item": [
+        {
+          "name": "Tạo phương thức thanh toán",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payment/methods",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payment", "methods"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"COD\",\n  \"name\": \"Thanh toán khi nhận hàng\",\n  \"is_active\": 1,\n  \"sort_order\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "Kích hoạt phương thức thanh toán",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payment/methods/:id/active",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payment", "methods", ":id", "active"],
+              "variable": [
+                { "key": "id", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Ngừng kích hoạt phương thức thanh toán",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payment/methods/:id/unactive",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payment", "methods", ":id", "unactive"],
+              "variable": [
+                { "key": "id", "value": "1" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Shipping Methods (Admin)",
+      "description": "Quản lý phương thức vận chuyển – chỉ Admin",
+      "item": [
+        {
+          "name": "Tạo phương thức vận chuyển",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/shipping/methods",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "shipping", "methods"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"GHTK\",\n  \"name\": \"Giao Hàng Tiết Kiệm\",\n  \"base_fee\": 22000,\n  \"estimated_days\": \"3-5 ngày\",\n  \"is_active\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "Kích hoạt phương thức vận chuyển",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/shipping/methods/:id/active",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "shipping", "methods", ":id", "active"],
+              "variable": [
+                { "key": "id", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Ngừng kích hoạt phương thức vận chuyển",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/shipping/methods/:id/unactive",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "shipping", "methods", ":id", "unactive"],
+              "variable": [
+                { "key": "id", "value": "1" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cloudinary",
+      "description": "Upload ảnh lên Cloudinary – yêu cầu đăng nhập và email đã xác thực",
+      "item": [
+        {
+          "name": "Upload ảnh",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/cloudinary/upload",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "cloudinary", "upload"]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "key",
+                  "value": "product_thumbnail",
+                  "type": "text",
+                  "description": "Các key hợp lệ: product_thumbnail, product_image, shop_logo, shop_banner, variant_image, ..."
+                },
+                {
+                  "key": "file",
+                  "value": "",
+                  "type": "file",
+                  "src": [],
+                  "description": "Ảnh JPEG, PNG, WebP hoặc GIF – tối đa 5MB"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
