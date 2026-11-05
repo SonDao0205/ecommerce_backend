@@ -1,16 +1,134 @@
+# File khai báo ứng dụng multi-container
+# Docker Compose đọc file này để biết cần chạy những service nào
+# và cách chúng kết nối với nhau
+
 services:
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.1
-    container_name: ecommerce-elasticsearch
+  # ════════════════════════════════════════════════════════
+  # SERVICE 1: PostgreSQL — Cơ sở dữ liệu chính
+  # ════════════════════════════════════════════════════════
+  postgres:
+    # Dùng image PostgreSQL 17 phiên bản Alpine (nhỏ gọn)
+    # Docker tự tải về từ Docker Hub nếu chưa có ở local
+    image: postgres:17-alpine
+
+    # Đặt tên cố định cho container (thay vì tên ngẫu nhiên)
+    # Dùng để: docker logs ecommerce-postgres, docker exec ecommerce-postgres...
+    container_name: ecommerce-postgres
+
+    # Biến môi trường để PostgreSQL tự tạo user/DB khi khởi động lần đầu
+    # ${...} đọc giá trị từ file .env cùng thư mục
     environment:
-      discovery.type: single-node
-      xpack.security.enabled: "false"
-      ES_JAVA_OPTS: -Xms1g -Xmx1g
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE}
+
+    # Ánh xạ port: "HOST_PORT:CONTAINER_PORT"
+    # 127.0.0.1:5432 → chỉ cho phép kết nối từ máy local (không expose ra internet)
+    # Bỏ "127.0.0.1:" nếu muốn truy cập từ mạng khác (kém bảo mật hơn)
     ports:
-      - "127.0.0.1:9200:9200"
+      - '127.0.0.1:5432:5432'
+
+    # Named volume: lưu dữ liệu database tồn tại qua các lần restart/xóa container
+    # /var/lib/postgresql/data là nơi PostgreSQL lưu toàn bộ data
+    # Nếu không khai báo volume này → xóa container là MẤT TOÀN BỘ DATA
     volumes:
-      - elasticsearch-data:/usr/share/elasticsearch/data
+      - postgres-data:/var/lib/postgresql/data
+
+    # Healthcheck: kiểm tra postgres đã thực sự sẵn sàng nhận kết nối chưa
+    # pg_isready: lệnh có sẵn trong image postgres, trả về 0 nếu DB đang chạy
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}']
+      interval: 10s # Kiểm tra mỗi 10 giây
+      timeout: 5s # Timeout nếu không phản hồi trong 5 giây
+      retries: 5 # Thử lại tối đa 5 lần trước khi đánh dấu "unhealthy"
+      start_period: 15s # Cho postgres thêm 15s khởi động trước khi bắt đầu check
+
+    # Tự restart nếu container bị crash, trừ khi bạn tắt thủ công (docker stop)
     restart: unless-stopped
 
+  # ════════════════════════════════════════════════════════
+  # SERVICE 2: Elasticsearch — Full-text search engine
+  # ════════════════════════════════════════════════════════
+  elasticsearch:
+    # Image chính thức từ Elastic registry (không phải Docker Hub)
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.1
+
+    container_name: ecommerce-elasticsearch
+
+    environment:
+      # Chạy chế độ 1 node duy nhất (phù hợp cho development)
+      # Production nên dùng cluster nhiều node
+      discovery.type: single-node
+
+      # Tắt xác thực bảo mật — CHỈ dùng cho development!
+      # Production: đặt thành "true" và cấu hình TLS/password
+      xpack.security.enabled: 'false'
+
+      # Giới hạn RAM cho JVM: min 512MB, max 512MB
+      # Elasticsearch mặc định dùng 50% RAM máy — cần giới hạn khi dev
+      # Tăng lên nếu cần hiệu năng: -Xms1g -Xmx1g
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+
+    # Port 9200: REST API (dùng để query/index documents)
+    ports:
+      - '127.0.0.1:9200:9200'
+
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
+    healthcheck:
+      # Gọi endpoint _cluster/health, thành công khi ES đã sẵn sàng
+      test:
+        [
+          'CMD-SHELL',
+          'curl -sf http://localhost:9200/_cluster/health || exit 1',
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      # ES khởi động chậm (JVM warm-up), cần start_period đủ dài
+      start_period: 60s
+
+    restart: unless-stopped
+
+  # ════════════════════════════════════════════════════════
+  # SERVICE 3: Backend — NestJS Application
+  # ════════════════════════════════════════════════════════
+  backend:
+    # Thay vì dùng image có sẵn, Docker sẽ BUILD image từ Dockerfile
+    build:
+      context: . # Thư mục chứa Dockerfile (. = thư mục hiện tại)
+      dockerfile: Dockerfile
+      target: production # Chỉ build đến stage "production" trong multi-stage Dockerfile
+
+    container_name: ecommerce-backend
+
+    ports:
+      # Mở port 8080 ra máy host để gọi API: http://localhost:8080
+      - '8080:8080'
+
+    # Nạp TOÀN BỘ biến từ file .env vào container (không cần liệt kê từng biến)
+    # Docker đọc file này và inject tất cả KEY=VALUE vào environment của container
+    env_file:
+      - .env
+
+    # Chờ các service phụ thuộc HEALTHY trước khi khởi động backend
+    # condition: service_healthy → phải có healthcheck + pass mới tính là sẵn sàng
+    # Nếu chỉ dùng "depends_on: - postgres" (không có condition) →
+    #   chỉ chờ container START, không chờ DB sẵn sàng → backend crash ngay khi boot
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+# ════════════════════════════════════════════════════════════
+# VOLUMES — Khai báo tất cả named volumes được dùng ở trên
+# Docker tự tạo và quản lý các volume này
+# Dữ liệu lưu tại: /var/lib/docker/volumes/ trên máy host
+# ════════════════════════════════════════════════════════════
 volumes:
-  elasticsearch-data:
+  postgres-data: # Lưu data của PostgreSQL
+  elasticsearch-data: # Lưu index data của Elasticsearch

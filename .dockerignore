@@ -1,0 +1,49 @@
+# ════════════════════════════════════════════════════════
+# .dockerignore — Danh sách file/folder KHÔNG copy vào image
+# Hoạt động giống .gitignore nhưng dành cho Docker build context
+# Giúp: image nhỏ hơn + build nhanh hơn + bảo mật hơn
+# ════════════════════════════════════════════════════════
+
+# Thư mục dependencies — sẽ được cài lại bên trong container bằng npm ci
+node_modules
+
+# Output build cũ trên máy host — stage builder sẽ tự build lại
+dist
+
+# File môi trường chứa thông tin nhạy cảm — KHÔNG được đưa vào image
+.env
+.env.*
+!.env.example
+
+# Cache TypeScript build
+*.tsbuildinfo
+
+# File test — không cần thiết trong production image
+test
+**/*.spec.ts
+**/*.e2e-spec.ts
+
+# Logs
+*.log
+logs/
+
+# Git
+.git
+.gitignore
+
+# IDE / Editor
+.vscode
+.idea
+*.swp
+
+# Docker files (không cần copy chính nó vào image)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# macOS
+.DS_Store
+
+# README
+README.md
+postman/
