@@ -117,6 +117,17 @@ export class UserService {
     return new AddressResponse(created);
   };
 
+  /** Lấy địa chỉ giao hàng và xác nhận địa chỉ thuộc đúng user đặt hàng. */
+  getAddressForUser = async (addressId: string, userId: string) => {
+    const address = await this.addressRepository.findOne({
+      where: { id: addressId, user: { id: userId } },
+    });
+    if (!address) {
+      throw new NotFoundException('Không tìm thấy địa chỉ giao hàng của bạn.');
+    }
+    return address;
+  };
+
   updateEmailVerify = async (id: string) => {
     const exist = await this.findById(id);
 

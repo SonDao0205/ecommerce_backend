@@ -35,6 +35,6 @@ import { ElasticModule } from '../elastic/elastic.module.js';
   ],
   controllers: [ProductController],
   providers: [ProductService, ProductVariantService],
-  exports: [ProductService],
+  exports: [ProductService, ProductVariantService],
 })
 export class ProductModule {}

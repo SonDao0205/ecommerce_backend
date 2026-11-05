@@ -163,6 +163,33 @@ export class VoucherService {
     };
   };
 
+  /** Chọn voucher sàn đủ điều kiện để order áp dụng tự động. */
+  async findAutomaticPlatformVoucher(subtotal: string, userId: string) {
+    const now = new Date();
+    const candidates = await this.voucherRepository.find({
+      where: { scope: VoucherScope.PLATFORM, is_active: 1 },
+      order: { created_at: 'ASC' },
+    });
+    for (const voucher of candidates) {
+      if (
+        now < voucher.start_at ||
+        now > voucher.end_at ||
+        this.toCents(subtotal) < this.toCents(voucher.min_order_value) ||
+        (voucher.usage_limit !== null &&
+          voucher.used_count >= voucher.usage_limit)
+      ) {
+        continue;
+      }
+      const rows = (await this.dataSource.query(
+        `SELECT COUNT(*)::int AS count FROM voucher_usages
+         WHERE voucher_id = $1 AND user_id = $2`,
+        [voucher.id, userId],
+      )) as Array<{ count: number | string }>;
+      if (Number(rows[0]?.count ?? 0) < voucher.usage_per_user) return voucher;
+    }
+    return null;
+  }
+
   create = async (dto: CreateVoucherDto, actor: VoucherActor) => {
     this.assertValidWindow(dto.start_at, dto.end_at);
     this.assertDiscountValue(dto.discount_type, dto.discount_value);

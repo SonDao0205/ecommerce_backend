@@ -13,6 +13,7 @@ import type { Relation } from 'typeorm';
 import { User } from '../../user/entities/user.entity.js';
 import { ShopStatus } from './enum/shop.enum.js';
 import { ShopFollower } from './shop_follower.entity.js';
+import { ShopOrder } from './shop_order.entity.js';
 
 @Entity({ name: 'shops' })
 @Index('idx_shops_search_gin', { synchronize: false })
@@ -118,4 +119,7 @@ export class Shop {
 
   @OneToMany(() => ShopFollower, (shopFollower) => shopFollower.shop)
   followers: Relation<ShopFollower[]>;
+
+  @OneToMany(() => ShopOrder, (shopOrder) => shopOrder.shop)
+  shop_orders: Relation<ShopOrder[]>;
 }

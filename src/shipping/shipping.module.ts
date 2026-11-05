@@ -9,5 +9,6 @@ import { UserModule } from '../user/user.module.js';
   imports: [UserModule, TypeOrmModule.forFeature([ShippingMethod])],
   controllers: [ShippingController],
   providers: [ShippingService],
+  exports: [ShippingService],
 })
 export class ShippingModule {}

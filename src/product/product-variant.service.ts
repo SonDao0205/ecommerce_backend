@@ -3,26 +3,110 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { EntityManager } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import { CategoryAttribute } from '../category/entities/category_attribute.entity.js';
 import { AttributeValues } from '../category/entities/attribute_values.entity.js';
 import type { CloudinaryUploadResult } from '../cloudinary/cloudinary.service.js';
 import { Product } from './entities/product.entity.js';
 import { ProductVariant } from './entities/product_variant.entity.js';
 import { VariantAttributeValue } from './entities/variant_attribute_value.entity.js';
-import { ProductVariantStatus } from './entities/enum/product.enum.js';
+import {
+  ProductStatus,
+  ProductVariantStatus,
+} from './entities/enum/product.enum.js';
+import { ShopStatus } from '../shop/entities/enum/shop.enum.js';
 import {
   CreateProductVariantDto,
   ProductVariantAttributeDto,
   UpdateProductVariantDto,
 } from './dto/product-variant.dto.js';
 
-type ProductVariantInput =
-  | CreateProductVariantDto
-  | UpdateProductVariantDto;
+type ProductVariantInput = CreateProductVariantDto | UpdateProductVariantDto;
 
 @Injectable()
 export class ProductVariantService {
+  constructor(
+    @InjectRepository(ProductVariant)
+    private readonly variantRepository: Repository<ProductVariant>,
+  ) {}
+
+  /** Lấy variant đang bán cùng product và shop để định giá order. */
+  async getOrderableVariants(ids: string[]): Promise<ProductVariant[]> {
+    const variants = await this.variantRepository.find({
+      where: { id: In(ids) },
+      relations: { product: { shop: true } },
+    });
+    this.assertOrderableVariants(variants, ids.length);
+    return variants;
+  }
+
+  /** Khóa các variant trong transaction, xác nhận giá và tồn kho hiện tại. */
+  async lockOrderableVariants(
+    manager: EntityManager,
+    quantities: Map<string, number>,
+    expectedVariants: ProductVariant[],
+  ): Promise<ProductVariant[]> {
+    const ids = [...quantities.keys()];
+    const variants = await manager.getRepository(ProductVariant).find({
+      where: { id: In(ids) },
+      relations: { product: { shop: true } },
+      lock: { mode: 'pessimistic_write' },
+    });
+    this.assertOrderableVariants(variants, ids.length);
+
+    const expectedById = new Map(
+      expectedVariants.map((variant) => [variant.id, variant]),
+    );
+    for (const variant of variants) {
+      const expected = expectedById.get(variant.id);
+      if (!expected || expected.price !== variant.price) {
+        throw new BadRequestException(
+          'Giá sản phẩm vừa thay đổi; vui lòng tạo lại đơn hàng.',
+        );
+      }
+      if (variant.stock < quantities.get(variant.id)!) {
+        throw new BadRequestException(
+          `${variant.product.name} không đủ tồn kho; hiện còn ${variant.stock}.`,
+        );
+      }
+    }
+    return variants;
+  }
+
+  /** Trừ tồn kho cho variant đã khóa trong transaction của order. */
+  async decreaseOrderStock(
+    manager: EntityManager,
+    variant: ProductVariant,
+    quantity: number,
+  ): Promise<void> {
+    variant.stock -= quantity;
+    await manager.getRepository(ProductVariant).save(variant);
+  }
+
+  private assertOrderableVariants(
+    variants: ProductVariant[],
+    expectedCount: number,
+  ): void {
+    if (variants.length !== expectedCount) {
+      throw new NotFoundException(
+        'Một hoặc nhiều biến thể sản phẩm không tồn tại.',
+      );
+    }
+    for (const variant of variants) {
+      if (
+        variant.status !== ProductVariantStatus.ACTIVE ||
+        variant.product.status !== ProductStatus.ACTIVE ||
+        variant.product.is_deleted !== 0 ||
+        variant.product.shop.status !== ShopStatus.ACTIVE
+      ) {
+        throw new BadRequestException(
+          `Sản phẩm ${variant.product.name} hiện không thể đặt mua.`,
+        );
+      }
+    }
+  }
+
   /**
    * Trừ tồn kho sau khi thanh toán thành công.
    * Dùng EntityManager trong transaction của caller để các thay đổi chỉ được

@@ -38,6 +38,18 @@ export class PaymentService {
     }
   }
 
+  /** Trả payment method đang active để service đặt hàng kiểm tra lựa chọn. */
+  async getActiveMethod(id: string): Promise<PaymentMethod> {
+    const method = await this.paymentMethodRepository.findOneBy({
+      id,
+      is_active: 1,
+    });
+    if (!method) {
+      throw new NotFoundException('Phương thức thanh toán không hợp lệ.');
+    }
+    return method;
+  }
+
   /** Kích hoạt payment method bằng cách cập nhật duy nhất is_active. */
   async activeMethod(id: string): Promise<void> {
     await this.setActive(id, 1);

@@ -7,9 +7,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Shop } from './entities/shop.entity.js';
 import { ShopFollower } from './entities/shop_follower.entity.js';
+import { ShopOrder } from './entities/shop_order.entity.js';
 import { CreateShopDto } from './dto/create-shop.dto.js';
 import { UpdateShopDto } from './dto/update-shop.dto.js';
 import { ShopStatus } from './entities/enum/shop.enum.js';
@@ -40,6 +41,24 @@ export class ShopService {
       where: { id: shopId },
     });
   };
+
+  /** Tạo shop_order trong transaction đang tạo order. */
+  async createShopOrder(
+    manager: EntityManager,
+    input: Pick<
+      ShopOrder,
+      | 'order_id'
+      | 'shop_id'
+      | 'shipping_method_id'
+      | 'subtotal'
+      | 'discount_amount'
+      | 'shipping_fee'
+      | 'total_amount'
+    >,
+  ): Promise<ShopOrder> {
+    const repository = manager.getRepository(ShopOrder);
+    return repository.save(repository.create(input));
+  }
 
   /** Trả shop đang hoạt động của seller cho ProductModule qua service boundary. */
   getActiveShopByOwnerId = async (userId: string): Promise<Shop> => {

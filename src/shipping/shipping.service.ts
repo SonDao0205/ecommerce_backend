@@ -39,6 +39,18 @@ export class ShippingService {
     }
   }
 
+  /** Trả shipping method đang active để service đặt hàng kiểm tra lựa chọn. */
+  async getActiveMethod(id: string): Promise<ShippingMethod> {
+    const method = await this.shippingMethodRepository.findOneBy({
+      id,
+      is_active: 1,
+    });
+    if (!method) {
+      throw new NotFoundException('Phương thức giao hàng không hợp lệ.');
+    }
+    return method;
+  }
+
   /** Kích hoạt shipping method bằng cách cập nhật duy nhất is_active. */
   async activeMethod(id: string): Promise<void> {
     await this.setActive(id, 1);
