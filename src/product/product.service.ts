@@ -332,6 +332,8 @@ export class ProductService {
     files: ProductUploadFiles = {},
   ) => {
     const shop = await this.getActiveSellerShop(userId);
+    // Preflight checks avoid unnecessary uploads; the product is loaded again
+    // under a pessimistic write lock before any database changes are applied.
     const product = await this.getOwnedProduct(productId, shop.id);
 
     if (
@@ -356,9 +358,24 @@ export class ProductService {
         );
       }
 
-      product.status = dto.status;
       const saved = await this.dataSource.transaction(async (manager) => {
-        const result = await manager.getRepository(Product).save(product);
+        const lockedProduct = await this.getOwnedProductForUpdate(
+          manager,
+          productId,
+          shop.id,
+        );
+        if (
+          lockedProduct.status !== ProductStatus.ACTIVE &&
+          lockedProduct.status !== ProductStatus.HIDDEN
+        ) {
+          throw new ForbiddenException(
+            'Trạng thái sản phẩm đã thay đổi. Vui lòng tải lại trước khi cập nhật.',
+          );
+        }
+        this.assertSellerCanUpdateProduct(lockedProduct, dto, files);
+        lockedProduct.status =
+          dto.status != undefined ? dto.status : ProductStatus.ACTIVE;
+        const result = await manager.getRepository(Product).save(lockedProduct);
         await this.productSearchSync.enqueueProductChanged(manager, result.id);
         return result;
       });
@@ -366,20 +383,7 @@ export class ProductService {
       return saved;
     }
 
-    if (product.status !== ProductStatus.DRAFT) {
-      throw new ForbiddenException(
-        'Chỉ sản phẩm DRAFT mới được chỉnh sửa nội dung; sản phẩm PENDING đang chờ duyệt.',
-      );
-    }
-    if (
-      dto.status &&
-      dto.status !== ProductStatus.DRAFT &&
-      dto.status !== ProductStatus.PENDING
-    ) {
-      throw new ForbiddenException(
-        'Seller chỉ có thể giữ bản nháp hoặc gửi sản phẩm sang PENDING.',
-      );
-    }
+    this.assertSellerCanUpdateProduct(product, dto, files);
     if (
       Object.keys(dto).length === 0 &&
       !files.thumbnail &&
@@ -391,21 +395,7 @@ export class ProductService {
       );
     }
 
-    const categoryId = dto.category_id ?? product.category_id;
-    const category = dto.category_id
-      ? await this.getActiveCategory(dto.category_id)
-      : undefined;
     if (dto.brand_id) await this.getActiveBrand(dto.brand_id);
-
-    const newSlug = dto.slug?.trim();
-    if (newSlug && newSlug !== product.slug) {
-      const existingSlug = await this.productRepository.findOne({
-        where: { slug: newSlug },
-      });
-      if (existingSlug && existingSlug.id !== product.id) {
-        throw new ConflictException('Slug sản phẩm đã tồn tại.');
-      }
-    }
 
     const uploaded: CloudinaryUploadResult[] = [];
     try {
@@ -417,45 +407,82 @@ export class ProductService {
 
       const updated = await this.dataSource.transaction(async (manager) => {
         const products = manager.getRepository(Product);
+        const lockedProduct = await this.getOwnedProductForUpdate(
+          manager,
+          productId,
+          shop.id,
+        );
+        this.assertSellerCanUpdateProduct(lockedProduct, dto, files);
 
-        if (dto.name !== undefined) product.name = dto.name.trim();
-        if (newSlug !== undefined) product.slug = newSlug;
-        if (category) {
-          product.category = category;
-          product.category_id = category.id;
+        const lockedCategoryId = dto.category_id ?? lockedProduct.category_id;
+        const lockedCategory = dto.category_id
+          ? await manager.getRepository(Categories).findOne({
+              where: { id: dto.category_id, is_active: 1 },
+            })
+          : undefined;
+        if (dto.category_id && !lockedCategory) {
+          throw new NotFoundException('Danh mục không tồn tại hoặc đã bị ẩn.');
+        }
+
+        const lockedSlug = dto.slug?.trim();
+        if (lockedSlug && lockedSlug !== lockedProduct.slug) {
+          const existingSlug = await products.findOne({
+            where: { slug: lockedSlug },
+          });
+          if (existingSlug && existingSlug.id !== lockedProduct.id) {
+            throw new ConflictException('Slug sản phẩm đã tồn tại.');
+          }
+        }
+
+        if (dto.name !== undefined) lockedProduct.name = dto.name.trim();
+        if (lockedSlug !== undefined) lockedProduct.slug = lockedSlug;
+        if (lockedCategory) {
+          lockedProduct.category = lockedCategory;
+          lockedProduct.category_id = lockedCategory.id;
         }
         if (Object.prototype.hasOwnProperty.call(dto, 'brand_id')) {
-          product.brand_id = dto.brand_id ?? null;
-          product.brand = dto.brand_id
-            ? await manager.getRepository(Brand).findOneByOrFail({
-                id: dto.brand_id,
-              })
-            : null;
+          lockedProduct.brand_id = dto.brand_id ?? null;
+          if (dto.brand_id) {
+            const brand = await manager.getRepository(Brand).findOne({
+              where: { id: dto.brand_id, is_active: 1 },
+            });
+            if (!brand) {
+              throw new NotFoundException(
+                'Thương hiệu không tồn tại hoặc đã bị ẩn.',
+              );
+            }
+            lockedProduct.brand = brand;
+          } else {
+            lockedProduct.brand = null;
+          }
         }
         if (dto.description !== undefined) {
-          product.description = dto.description?.trim() || null;
+          lockedProduct.description = dto.description?.trim() || null;
         }
-        if (dto.price !== undefined) product.price = dto.price;
-        if (dto.status !== undefined) product.status = dto.status;
+        if (dto.price !== undefined) lockedProduct.price = dto.price;
+        if (dto.status !== undefined) lockedProduct.status = dto.status;
 
         if (images.thumbnail) {
-          product.thumbnail_url = images.thumbnail.secure_url;
-        } else if (!product.thumbnail_url && images.images.length > 0) {
-          product.thumbnail_url = images.images[0].secure_url;
+          lockedProduct.thumbnail_url = images.thumbnail.secure_url;
+        } else if (!lockedProduct.thumbnail_url && images.images.length > 0) {
+          lockedProduct.thumbnail_url = images.images[0].secure_url;
         }
 
-        await products.save(product);
-        await this.saveProductImages(manager, product, images, false);
+        await products.save(lockedProduct);
+        await this.saveProductImages(manager, lockedProduct, images, false);
         await this.productVariantService.saveProductVariants(
           manager,
-          product,
-          categoryId,
+          lockedProduct,
+          lockedCategoryId,
           dto.variants ?? [],
           images.variantImages,
         );
-        await this.productSearchSync.enqueueProductChanged(manager, product.id);
+        await this.productSearchSync.enqueueProductChanged(
+          manager,
+          lockedProduct.id,
+        );
 
-        return this.loadProduct(manager, product.id);
+        return this.loadProduct(manager, lockedProduct.id);
       });
       if (updated) await this.productSearchSync.syncAfterCommit(updated.id);
       return updated;
@@ -525,6 +552,71 @@ export class ProductService {
     if (!product)
       throw new NotFoundException('Không tìm thấy sản phẩm của shop.');
     return product;
+  }
+
+  /** Lock the owned product row until the update transaction commits. */
+  private async getOwnedProductForUpdate(
+    manager: EntityManager,
+    productId: string,
+    shopId: string,
+  ): Promise<Product> {
+    const product = await manager
+      .getRepository(Product)
+      .createQueryBuilder('product')
+      .setLock('pessimistic_write')
+      .where('product.id = :productId', { productId })
+      .andWhere('product.shop_id = :shopId', { shopId })
+      .andWhere('product.is_deleted = :isDeleted', { isDeleted: 0 })
+      .getOne();
+    if (!product)
+      throw new NotFoundException('Không tìm thấy sản phẩm của shop.');
+    return product;
+  }
+
+  /** Recheck mutable state after acquiring the row lock to avoid stale writes. */
+  private assertSellerCanUpdateProduct(
+    product: Product,
+    dto: UpdateProductDto,
+    files: ProductUploadFiles,
+  ): void {
+    if (
+      product.status === ProductStatus.ACTIVE ||
+      product.status === ProductStatus.HIDDEN
+    ) {
+      const onlyStatus = Object.keys(dto).every((key) => key === 'status');
+      const hasUploads = Boolean(
+        files.thumbnail || files.images?.length || files.variant_images?.length,
+      );
+      if (!onlyStatus || hasUploads) {
+        throw new ForbiddenException(
+          'Sản phẩm đang hoạt động chỉ được chuyển trạng thái ACTIVE/HIDDEN.',
+        );
+      }
+      if (
+        dto.status !== ProductStatus.ACTIVE &&
+        dto.status !== ProductStatus.HIDDEN
+      ) {
+        throw new BadRequestException(
+          'Sản phẩm ACTIVE/HIDDEN chỉ được chuyển qua lại giữa hai trạng thái này.',
+        );
+      }
+      return;
+    }
+
+    if (product.status !== ProductStatus.DRAFT) {
+      throw new ForbiddenException(
+        'Chỉ sản phẩm DRAFT mới được chỉnh sửa nội dung; sản phẩm PENDING đang chờ duyệt.',
+      );
+    }
+    if (
+      dto.status &&
+      dto.status !== ProductStatus.DRAFT &&
+      dto.status !== ProductStatus.PENDING
+    ) {
+      throw new ForbiddenException(
+        'Seller chỉ có thể giữ bản nháp hoặc gửi sản phẩm sang PENDING.',
+      );
+    }
   }
 
   /**

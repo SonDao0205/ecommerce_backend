@@ -24,6 +24,38 @@ type ProductVariantInput =
 @Injectable()
 export class ProductVariantService {
   /**
+   * Trừ tồn kho sau khi thanh toán thành công.
+   * Dùng EntityManager trong transaction của caller để các thay đổi chỉ được
+   * commit cùng đơn hàng và được rollback nếu transaction gặp lỗi.
+   */
+  async update_quantity(
+    manager: EntityManager,
+    variant: ProductVariant,
+    quantity: number,
+  ): Promise<ProductVariant> {
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new BadRequestException(
+        'Số lượng sản phẩm phải là số nguyên lớn hơn 0.',
+      );
+    }
+
+    const repository = manager.getRepository(ProductVariant);
+    const lockedVariant = await repository.findOne({
+      where: { id: variant.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!lockedVariant) {
+      throw new NotFoundException('Không tìm thấy biến thể sản phẩm.');
+    }
+    if (lockedVariant.stock < quantity) {
+      throw new BadRequestException('Số lượng tồn kho không đủ.');
+    }
+
+    lockedVariant.stock -= quantity;
+    return repository.save(lockedVariant);
+  }
+
+  /**
    * Tạo biến thể mới hoặc cập nhật biến thể đã có trong transaction của product.
    * Luồng mỗi biến thể: xác định create/update -> lưu trường SKU, giá, tồn kho,
    * trạng thái và ảnh -> nếu client gửi attributes thì thay các liên kết cũ
